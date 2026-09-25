@@ -14,6 +14,20 @@ that looks material, and fires a signal when the stock actually starts moving on
 | What is the realistic win? | A filter that cuts about 1,000 headlines a day down to the 3–10 worth your attention, plus **measured statistics** on which catalysts actually lead to tradeable moves. Any trading edge would come from that dataset, not from raw sentiment. |
 | How do we avoid losing money finding out? | Log everything, measure forward returns, paper-trade for 2–3 months against go/no-go criteria written down in advance, and only then trade small with hard risk limits. |
 
+## Implementation status
+
+The infrastructure is built as a C++20 engine that relies on external services as little as possible. See [README.md](README.md) and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+| Plan item | Status |
+|---|---|
+| Aggregator: EDGAR, wires, halts; dedupe; ticker mapping | Done (`stokd`, epoll/TLS poller, EDGAR exhibit fetch) |
+| Enrichment from official sources | Done (`stok-ref`: Nasdaq Trader, SEC tickers/XBRL/daily indexes, FINRA) |
+| Scoring | Done. A local rule engine (Aho-Corasick) replaces the LLM on the hot path. LLM enrichment stays optional and future, never blocking an alert. |
+| Market confirmation | Done. Nasdaq ITCH 5.0 (MoldUDP64 / file), or a UDP bridge from any source. |
+| Tiered alerts + halts + no-news movers | Done (stdout, Telegram, UDP JSON) |
+| Outcome tracking / journal | Done (JSONL: news, signals, outcomes at +1/5/15/30/60 min) |
+| Backtest harness + paper trading | Next (Phases 4–5 below) |
+
 ---
 
 ## 1. How realistic is a profitable bot?
@@ -85,7 +99,7 @@ A web dashboard (the StockTitan-like UI) is optional and comes after the signal 
                                  ▼
           ┌──────────── SCORE ─────────────┐     ┌────── MARKET ENGINE ──────┐
           │ fast rules (instant pre-score) │     │ live trades/quotes for    │
-          │ LLM extraction (structured)    │     │ tickers with fresh news + │
+          │ rule scorer (LLM optional)     │     │ tickers with fresh news + │
           │ → news_score, flags            │     │ top-gainer scanner        │
           └──────────────┬─────────────────┘     │ → % move, RVOL, VWAP,     │
                          │                       │   spread, $ volume, halts │
@@ -93,7 +107,7 @@ A web dashboard (the StockTitan-like UI) is optional and comes after the signal 
                                     ▼                        │
                          SIGNAL LOGIC (tiers, cooldowns) ◄───┘
                                     ▼
-                  Telegram/Discord alert ── Postgres (everything) ── Dashboard (later)
+                  Telegram/stdout/UDP alert ── JSONL journal (everything) ── Dashboard (later)
                                     ▼
                   OUTCOME TRACKER: returns at +1m/+5m/+15m/+60m/close/next day,
                   max favorable/adverse excursion, simulated fills
@@ -148,7 +162,7 @@ A web dashboard (the StockTitan-like UI) is optional and comes after the signal 
 
 We then compute `materiality = dollar_value / market_cap` in code, not in the LLM, and combine everything into a **news_score (0–100)** with explicit, versioned weights. Every weight change is logged so the backtest can tell which version produced which signal.
 
-**Model choice.** Start with `claude-opus-5` (at low effort) while we hand-label 300–500 releases. Then run the same labeled set through `claude-sonnet-5` and `claude-haiku-4-5`, and switch to a cheaper one only if it matches on *your* labels. Historical backfill uses the Batch API at 50% off. Costs are in §8.
+**Implemented differently.** The shipped engine does this extraction locally, with a compiled rule set (`config/rules.tsv`, about 320 phrases in one Aho-Corasick pass, ~11 µs per story): catalyst, definitive vs. non-binding, named counterparties, hedging and promotional language, offering and spam detection, and dollar-amount extraction for materiality. No external API is on the hot path. An LLM pass can be added later as asynchronous enrichment that never delays an alert.
 
 ### 3.5 Market engine ("is the stock actually running?")
 
@@ -182,37 +196,21 @@ news_score 84 · received 08:02:11 ET (Accesswire) · 8-K pending
 
 ### 3.7 Storage
 
-Postgres with tables `news_items`, `tickers`, `ticker_snapshots`, `scores` (versioned), `signals`, `outcomes` and `bars`. TimescaleDB is optional for bars. Keep raw payloads so we can re-score history when the model changes.
+*As built:* an append-only JSONL journal per trading day (`news`, `signals`, `outcomes`), written by its own thread and queried with DuckDB or pandas. Raw story text and scores are kept, so history can be re-scored whenever the rules change. A database can be layered on later for a dashboard.
 
 ---
 
-## 4. Tech stack
+## 4. Tech stack (as built)
 
-- **Python 3.12**, asyncio, `httpx`, `websockets`, `feedparser`, `asyncpg` and SQLAlchemy.
-- **Anthropic Python SDK** for extraction (structured outputs). A local FinBERT model is optional as a cheap sentiment baseline for comparison.
-- **Postgres 16** in Docker Compose.
-- **Telegram Bot API** for alerts (easiest). A Discord webhook is an alternative.
-- **FastAPI plus a lightweight frontend** for the dashboard (Phase 6).
-- **pandas and DuckDB** plus notebooks for research and backtests.
-- **Deployment:** one small VPS in a US-East region (close to the exchanges and news servers), with systemd or Docker, and structured logs.
+- **C++20**, single static core library, no third-party dependencies beyond **OpenSSL** (TLS) and **zlib** (gzip)
+- Custom non-blocking HTTP/1.1 + TLS client on **epoll**: keep-alive, conditional GET, staggered lanes, per-host token buckets
+- Lock-free **SPSC/MPSC rings**, per-symbol **seqlocks**, pinned threads, eventfd wake-ups or busy-polling
+- **Nasdaq TotalView-ITCH 5.0** decoder with **MoldUDP64** receiver (the exchange's official protocol); file replay; UDP bridge
+- **JSONL journal** instead of Postgres (append-only, off the hot path; query with DuckDB/pandas)
+- **Telegram Bot API** over a pre-warmed keep-alive connection; UDP JSON for dashboards
+- Deployment: one VPS in US-East, systemd unit in `deploy/`
 
-Proposed layout:
-
-```
-stok/
-  ingest/      edgar.py, wires.py, news_ws.py, halts.py
-  enrich/      fundamentals.py, dilution.py, issuer_history.py
-  score/       rules.py, llm_extract.py, news_score.py
-  market/      stream.py, indicators.py, scanner.py
-  signals/     engine.py, tiers.py
-  alerts/      telegram.py
-  outcomes/    tracker.py, fills.py
-  research/    backtest.py, notebooks/
-  db/          schema.sql, migrations/
-  docker-compose.yml
-```
-
----
+Layout: see the README.
 
 ## 5. Evaluation: the part that decides profitability
 
@@ -248,16 +246,16 @@ If it fails, the tool is still a good alert and research platform. You just don'
 
 Assumes one developer working part-time. Weeks overlap.
 
-| Phase | Weeks | Deliverable | Done when |
+| Phase | Weeks | Deliverable | Status |
 |---|---|---|---|
-| **0. Setup** | 0–1 | Repo skeleton, Docker Compose with Postgres, Alpaca and Telegram accounts, config and secrets handling | `docker compose up` runs an empty pipeline |
-| **1. Aggregator MVP** | 1–3 | EDGAR, wire RSS, Alpaca news and halt ingestion. Dedupe, ticker mapping, storage. Raw Telegram feed for in-universe tickers | A full trading day ingested with <1% duplicates and latency per source measured |
-| **2. Scoring** | 3–5 | Rules pre-score, LLM extraction, enrichment (market cap, shares, dilution and distress flags), news_score v1 | Beats a keyword baseline on 300 hand-labeled PRs |
-| **3. Market confirmation** | 5–7 | Live trade and quote stream per ticker, RVOL/VWAP/spread, gainer scanner, tiered alerts with cooldowns | Alerts arrive within ~2 s of the conditions being met, and noise is ≤ ~10 pushes/day |
-| **4. Outcome tracking and backtest** | 5–10 | Outcome tracker live. Historical backfill (news history plus intraday bars) and a backtest harness with the execution model from §5 | First honest report: which catalysts and filters show positive expectancy, if any |
-| **5. Paper trading** | 10–20 | Alpaca paper orders from signals under fixed rules, with a weekly report | Go/no-go criteria from §5 evaluated |
-| **6. Dashboard (optional)** | anytime after 3 | StockTitan-like web UI: live feed, filters, ticker pages, AI summaries, signal history | You use it daily instead of the Telegram feed |
-| **7. Small live trading** | only if Phase 5 passes | Semi-automatic execution with the risk limits from §6 | A month of live results in line with paper |
+| **0. Setup** | 0–1 | Repo, build, config, secrets via environment | **Done** |
+| **1. Aggregator MVP** | 1–3 | EDGAR, wire RSS and halt ingestion, dedupe, ticker mapping, journal, alerts | **Done**. Run `stokd --probe` on your server to verify the feed URLs and measure latency. |
+| **2. Scoring** | 3–5 | Rule scorer, enrichment (shares, float, dilution/distress flags), news_score | **Done**. Next: hand-label 300 releases from the journal and tune `rules.tsv`. |
+| **3. Market confirmation** | 5–7 | ITCH/bridge market data, RVOL/VWAP, gainer scanner, tiered alerts | **Done**. Needs an ITCH subscription or a bridged feed for live prices. |
+| **4. Outcome tracking and backtest** | 5–10 | Outcome tracker (done), backtest harness over the journal + ITCH history (next) | In progress |
+| **5. Paper trading** | 10–20 | Paper orders from signals under fixed rules, weekly report | Not started |
+| **6. Dashboard (optional)** | anytime after 3 | Web UI over the journal + UDP signal feed | Not started |
+| **7. Small live trading** | only if Phase 5 passes | Semi-automatic execution with the risk limits from §6 | Not started |
 
 Phases 1–3 give you a working alert tool in about 6–7 weeks. The profitability answer takes until about week 20, because it needs months of live-recorded data. Historical news with accurate receive-time timestamps is hard to get cheaply.
 
@@ -265,7 +263,7 @@ Phases 1–3 give you a working alert tool in about 6–7 weeks. The profitabili
 
 ## 8. Costs (monthly, approximate; verify current vendor pricing)
 
-**LLM extraction.** Assumes about 300 in-universe items/day (about 9k/month), about 2k input and 400 output tokens each, before prompt-caching savings:
+**LLM extraction.** The shipped engine scores locally, so there's no per-item API cost. For reference, if you later add optional LLM enrichment at about 300 in-universe items/day (about 9k/month), with about 2k input and 400 output tokens each:
 
 | Model | $ per 1M in / out | ≈ per item | ≈ per month |
 |---|---|---|---|
@@ -273,17 +271,15 @@ Phases 1–3 give you a working alert tool in about 6–7 weeks. The profitabili
 | `claude-sonnet-5` | $2 / $10 | $0.008 | ~$70 |
 | `claude-haiku-4-5` | $1 / $5 | $0.004 | ~$35 |
 
-Filtering to the universe *before* the LLM call matters. Unfiltered wire volume is about 5× larger.
-
 **Everything:**
 
 | Item | MVP (Phases 0–5) | Serious setup |
 |---|---|---|
 | News | Free (EDGAR, wire RSS, Alpaca news) | Paid Benzinga-grade feed: ~$100s |
-| Market data | Free IEX-only feed (volume understated, fine for development) | Full SIP real-time: ~$100–200 |
+| Market data | None (news-only), or replay Nasdaq's free sample ITCH files | Nasdaq TotalView-ITCH subscription + connectivity (exchange fees vary; check Nasdaq's price list), or bridge a broker feed |
 | Historical bars and news for backtests | Massive or Databento: ~$30–200 while backfilling | Same |
 | Float / short interest | Approximated from filings | Paid provider: ~$30–100 |
-| LLM | ~$35–180 | ~$70–300 |
+| LLM (optional enrichment only) | $0 | ~$35–180 |
 | VPS | ~$10–20 | ~$20–50 |
 | **Total** | **~$50–300** | **~$300–800** |
 
@@ -317,12 +313,9 @@ Filtering to the universe *before* the LLM call matters. Unfiltered wire volume 
 
 ## 12. Next step
 
-Start **Phase 0 and Phase 1**: repo skeleton, Postgres schema, EDGAR, wire and Alpaca-news ingestion, ticker mapping, and a raw Telegram feed. After a few trading days of real data we'll have measured source latency and volume, and can size everything else from actual numbers.
+Phases 0–3 are implemented (see *Implementation status* at the top). Next:
 
----
-
-### Sources
-
-- [Stock Titan: Rhea-AI](https://stocktitan.net/rhea-ai.html) and [pricing](https://www.stocktitan.net/pricing): 1–5 sentiment and impact scores; impact model matched the realized outcome exactly 57.4% of the time on a held-out month
-- [Charles Schwab: SEC approves scrapping $25,000 day-trader minimum](https://www.schwab.com/learn/story/sec-approves-scrapping-25000-day-trader-minimum) · [FINRA Regulatory Notice 26-10](https://www.finra.org/rules-guidance/notices/26-10)
-- [Massive: Polygon.io is now Massive](https://massive.com/blog/polygon-is-now-massive) · [Massive changelog (Benzinga news v2)](https://massive.com/changelog)
+1. Deploy on a US-East VPS, set `net.user_agent`, run `stok-ref`, then `stokd --probe` to verify every feed URL and measure latency.
+2. Run news-only for 1–2 weeks. Use the per-source "first/behind" stats to keep the fastest sources, and hand-label 300 stories from `news.jsonl` to tune `config/rules.tsv`.
+3. Choose live market data: a Nasdaq ITCH subscription (the official path) or a bridged broker feed, then build the RVOL baseline.
+4. Build the Phase 4 backtest over the journal and ITCH history, with the execution model from §5.

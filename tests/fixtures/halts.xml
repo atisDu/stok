@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:ndaq="http://www.nasdaqtrader.com/">
+<channel>
+<title>NASDAQTrader.com</title>
+<link>http://www.nasdaqtrader.com</link>
+<description>Trading Halts</description>
+<ndaq:numItems>2</ndaq:numItems>
+<item>
+<title>ACMR</title>
+<pubDate>Fri, 25 Sep 2026 14:05:12 GMT</pubDate>
+<ndaq:HaltDate>09/25/2026</ndaq:HaltDate>
+<ndaq:HaltTime>10:05:12</ndaq:HaltTime>
+<ndaq:IssueSymbol>ACMR</ndaq:IssueSymbol>
+<ndaq:IssueName>Acme Robotics, Inc.</ndaq:IssueName>
+<ndaq:Market>NASDAQ</ndaq:Market>
+<ndaq:ReasonCode>LUDP</ndaq:ReasonCode>
+<ndaq:PauseThresholdPrice>3.1500</ndaq:PauseThresholdPrice>
+<ndaq:ResumptionDate></ndaq:ResumptionDate>
+<ndaq:ResumptionQuoteTime></ndaq:ResumptionQuoteTime>
+<ndaq:ResumptionTradeTime></ndaq:ResumptionTradeTime>
+<description><![CDATA[<table><tr><td>ACMR</td></tr></table>]]></description>
+</item>
+<item>
+<title>DLTX</title>
+<pubDate>Fri, 25 Sep 2026 11:50:00 GMT</pubDate>
+<ndaq:HaltDate>09/25/2026</ndaq:HaltDate>
+<ndaq:HaltTime>07:50:00</ndaq:HaltTime>
+<ndaq:IssueSymbol>DLTX</ndaq:IssueSymbol>
+<ndaq:IssueName>Delta Therapeutics, Inc.</ndaq:IssueName>
+<ndaq:Market>NASDAQ</ndaq:Market>
+<ndaq:ReasonCode>T1</ndaq:ReasonCode>
+<ndaq:PauseThresholdPrice></ndaq:PauseThresholdPrice>
+<ndaq:ResumptionDate>09/25/2026</ndaq:ResumptionDate>
+<ndaq:ResumptionQuoteTime>08:25:00</ndaq:ResumptionQuoteTime>
+<ndaq:ResumptionTradeTime>08:30:00</ndaq:ResumptionTradeTime>
+<description>DLTX halted</description>
+</item>
+</channel>
+</rss>

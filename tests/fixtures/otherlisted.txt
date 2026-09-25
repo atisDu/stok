@@ -1,0 +1,5 @@
+ACT Symbol|Security Name|Exchange|CQS Symbol|ETF|Round Lot Size|Test Issue|NASDAQ Symbol
+CHLY|Charlie Corp Common Stock|N|CHLY|N|100|N|CHLY
+FOXT|Foxtrot Mining Corp Common Stock|A|FOXT|N|100|N|FOXT
+BRK.B|Berkshire Hathaway Inc. Class B|N|BRK.B|N|100|N|BRK.B
+File Creation Time: 0925202607:01|||||||

@@ -1,0 +1,5 @@
+build*/
+data/
+*.tmp
+compile_commands.json
+__pycache__/

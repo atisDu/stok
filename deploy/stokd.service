@@ -1,0 +1,42 @@
+# systemd unit for stokd. Install:
+#   sudo cp deploy/stokd.service /etc/systemd/system/ && sudo systemctl daemon-reload
+#   sudo systemctl enable --now stokd
+# Restarting daily (see stokd-restart.timer below) reloads the security master
+# and the volume baseline.
+[Unit]
+Description=stok news + market signal daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=stok
+WorkingDirectory=/opt/stok
+Environment=STOK_TELEGRAM_TOKEN=
+Environment=STOK_TELEGRAM_CHAT_ID=
+# Refresh official reference data before starting (symbols, SEC share counts,
+# filings history, FINRA short volume). Failure is non-fatal.
+ExecStartPre=-/opt/stok/build/stok-ref -c /opt/stok/config/stok.conf --days 10
+ExecStart=/opt/stok/build/stokd -c /opt/stok/config/stok.conf
+KillSignal=SIGINT
+Restart=on-failure
+RestartSec=2
+# Latency: allow SCHED_FIFO + memory locking when configured in [threads].
+AmbientCapabilities=CAP_SYS_NICE CAP_IPC_LOCK
+LimitMEMLOCK=infinity
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+
+# --- /etc/systemd/system/stokd-restart.timer (optional) ---
+# [Timer]
+# OnCalendar=Mon..Fri 03:50 America/New_York
+# Unit=stokd-restart.service
+# [Install]
+# WantedBy=timers.target
+#
+# --- /etc/systemd/system/stokd-restart.service ---
+# [Service]
+# Type=oneshot
+# ExecStart=/bin/systemctl restart stokd

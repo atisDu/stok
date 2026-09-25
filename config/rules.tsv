@@ -1,0 +1,366 @@
+# stok scoring rules: kind <TAB> weight <TAB> phrase
+#
+# Phrases are matched case-insensitively on word boundaries; punctuation and
+# hyphens count as spaces ("at-the-market" == "at the market"). A trailing '*'
+# makes a prefix match ("approv*" matches approval, approved, approves).
+#
+# kinds:
+#   cat:<catalyst>  base score for the story's catalyst (highest match wins; +5 if in headline)
+#                   catalysts: fda clinical contract mna_target mna_acquirer earnings uplisting
+#                              partnership product buyback crypto_ai legal_win offering
+#                              reverse_split distress other
+#   spec        specificity (definitive, signed, awarded...)   summed, capped at +15
+#   tier1       named top-tier counterparty                   max weight applies
+#   hedge       hedging language (negative weight)            summed, capped at -15
+#   promo       promotional language (negative weight)        summed, capped at -15
+#   nonbinding  LOI / MOU (negative weight)                   min weight applies
+#   neg         negative outcome words (negative weight)      summed, capped at -30
+#   dilution    offering/financing language -> hard block (score <= 15)
+#   distress    delisting / going concern / bankruptcy -> -25
+#   rsplit      reverse split -> -20
+#   spam        law-firm investor alerts etc. -> score 0
+#
+# These weights are starting guesses. Tune them against the journal
+# (news.jsonl + outcomes.jsonl) once real outcomes accumulate.
+
+# ---------------- FDA / regulatory ----------------
+cat:fda	72	fda approval
+cat:fda	72	fda approv*
+cat:fda	70	approved by the fda
+cat:fda	70	approved by the u s food and drug administration
+cat:fda	68	marketing authorization
+cat:fda	66	510 k clearance
+cat:fda	64	fda clearance
+cat:fda	64	fda clears
+cat:fda	62	de novo
+cat:fda	60	emergency use authorization
+cat:fda	60	ce mark
+cat:fda	58	breakthrough therapy designation
+cat:fda	56	breakthrough device designation
+cat:fda	52	fast track designation
+cat:fda	50	orphan drug designation
+cat:fda	50	rare pediatric disease designation
+cat:fda	48	priority review
+cat:fda	46	ind clearance
+cat:fda	44	pdufa
+cat:fda	40	accepted for review
+# ---------------- clinical ----------------
+cat:clinical	62	met its primary endpoint
+cat:clinical	62	met the primary endpoint
+cat:clinical	60	achieved the primary endpoint
+cat:clinical	58	statistically significant
+cat:clinical	55	positive topline
+cat:clinical	55	positive top line
+cat:clinical	52	topline results
+cat:clinical	50	positive results
+cat:clinical	48	positive data
+cat:clinical	46	phase 3
+cat:clinical	42	phase 2
+cat:clinical	36	phase 1
+cat:clinical	34	first patient dosed
+# ---------------- contracts / orders ----------------
+cat:contract	55	purchase order
+cat:contract	55	purchase orders
+cat:contract	55	awarded a contract
+cat:contract	55	contract award
+cat:contract	55	awarded contract
+cat:contract	55	wins contract
+cat:contract	54	secures contract
+cat:contract	54	secured a contract
+cat:contract	52	supply agreement
+cat:contract	52	distribution agreement
+cat:contract	52	master services agreement
+cat:contract	50	license agreement
+cat:contract	50	licensing agreement
+cat:contract	50	definitive agreement
+cat:contract	48	contract valued
+cat:contract	48	multi year contract
+cat:contract	48	order from
+cat:contract	46	receives order
+cat:contract	46	receives orders
+cat:contract	44	government contract
+cat:contract	44	task order
+cat:contract	42	indefinite delivery
+cat:contract	40	contract with
+cat:contract	40	agreement with
+cat:contract	34	selected by
+# ---------------- M&A ----------------
+cat:mna_target	75	to be acquired by
+cat:mna_target	75	agreed to be acquired
+cat:mna_target	72	definitive merger agreement
+cat:mna_target	70	per share in cash
+cat:mna_target	68	tender offer
+cat:mna_target	60	take private
+cat:mna_target	55	unsolicited proposal
+cat:mna_target	50	strategic alternatives
+cat:mna_acquirer	40	to acquire
+cat:mna_acquirer	40	acquisition of
+cat:mna_acquirer	38	completes acquisition
+cat:mna_acquirer	36	acquires
+cat:mna_acquirer	34	merger
+# ---------------- earnings / guidance ----------------
+cat:earnings	48	record revenue
+cat:earnings	48	record quarterly revenue
+cat:earnings	46	raises guidance
+cat:earnings	46	raises full year
+cat:earnings	44	revenue increased
+cat:earnings	44	revenue grew
+cat:earnings	42	first profitable
+cat:earnings	42	net income of
+cat:earnings	40	positive ebitda
+cat:earnings	38	preliminary revenue
+cat:earnings	34	financial results
+cat:earnings	30	quarter results
+# ---------------- listing ----------------
+cat:uplisting	50	uplisting
+cat:uplisting	50	uplist
+cat:uplisting	48	approved for listing on the nasdaq
+cat:uplisting	48	approved for listing on nasdaq
+cat:uplisting	46	regains compliance
+cat:uplisting	44	commence trading on the nasdaq
+# ---------------- partnership ----------------
+cat:partnership	40	strategic partnership
+cat:partnership	38	strategic alliance
+cat:partnership	38	collaboration agreement
+cat:partnership	36	joint venture
+cat:partnership	34	partnership with
+cat:partnership	32	partners with
+cat:partnership	30	collaboration with
+cat:partnership	28	teams up with
+# ---------------- product ----------------
+cat:product	32	commercial launch
+cat:product	30	launches
+cat:product	28	now available
+cat:product	28	patent granted
+cat:product	28	issued patent
+cat:product	26	receives patent
+cat:product	24	unveils
+# ---------------- buyback ----------------
+cat:buyback	34	share repurchase
+cat:buyback	34	stock repurchase
+cat:buyback	32	buyback
+cat:buyback	30	special dividend
+# ---------------- buzzword pivots ----------------
+cat:crypto_ai	38	bitcoin treasury
+cat:crypto_ai	38	digital asset treasury
+cat:crypto_ai	36	crypto treasury
+cat:crypto_ai	34	treasury reserve asset
+cat:crypto_ai	32	artificial intelligence
+cat:crypto_ai	30	ai powered
+cat:crypto_ai	30	generative ai
+cat:crypto_ai	28	blockchain
+cat:crypto_ai	28	quantum computing
+# ---------------- legal ----------------
+cat:legal_win	40	favorable ruling
+cat:legal_win	40	jury verdict
+cat:legal_win	38	patent infringement lawsuit against
+cat:legal_win	36	settlement agreement
+# ---------------- specificity ----------------
+spec	6	definitive
+spec	5	signed
+spec	5	executed
+spec	5	awarded
+spec	5	received
+spec	5	completed
+spec	5	closed
+spec	4	approved
+spec	4	granted
+spec	4	record
+spec	4	binding
+spec	4	firm order
+spec	3	initial order
+spec	3	follow on order
+spec	3	repeat order
+# ---------------- named top-tier counterparties ----------------
+tier1	12	department of defense
+tier1	12	u s army
+tier1	12	u s navy
+tier1	12	u s air force
+tier1	12	space force
+tier1	10	darpa
+tier1	10	nasa
+tier1	10	department of energy
+tier1	10	nih
+tier1	10	barda
+tier1	10	fortune 500
+tier1	10	fortune 100
+tier1	10	walmart
+tier1	10	amazon
+tier1	10	microsoft
+tier1	10	nvidia
+tier1	10	apple
+tier1	10	google
+tier1	10	alphabet
+tier1	10	meta platforms
+tier1	10	tesla
+tier1	10	oracle
+tier1	10	pfizer
+tier1	10	merck
+tier1	10	johnson johnson
+tier1	10	novartis
+tier1	10	roche
+tier1	10	astrazeneca
+tier1	10	eli lilly
+tier1	10	sanofi
+tier1	10	boeing
+tier1	10	lockheed martin
+tier1	10	raytheon
+tier1	10	northrop grumman
+tier1	10	general dynamics
+tier1	8	target corporation
+tier1	8	costco
+tier1	8	home depot
+tier1	8	ibm
+tier1	8	cisco
+tier1	8	intel
+tier1	8	samsung
+# ---------------- hedging ----------------
+hedge	-3	potential
+hedge	-3	potentially
+hedge	-3	could
+hedge	-3	expects to
+hedge	-3	anticipates
+hedge	-3	anticipated
+hedge	-3	intends to
+hedge	-3	plans to
+hedge	-4	exploring
+hedge	-4	evaluating
+hedge	-4	in discussions
+hedge	-4	in talks
+hedge	-4	subject to
+hedge	-3	aims to
+hedge	-3	seeks to
+hedge	-5	up to
+# ---------------- non-binding ----------------
+nonbinding	-12	letter of intent
+nonbinding	-12	memorandum of understanding
+nonbinding	-12	non binding
+nonbinding	-12	nonbinding
+nonbinding	-10	mou
+nonbinding	-10	loi
+nonbinding	-8	term sheet
+nonbinding	-6	framework agreement
+# ---------------- promotional language ----------------
+promo	-3	poised
+promo	-3	game changer
+promo	-3	game changing
+promo	-3	revolutionary
+promo	-3	transformational
+promo	-3	transformative
+promo	-3	unprecedented
+promo	-3	explosive
+promo	-3	skyrocket*
+promo	-3	massive
+promo	-3	tremendous
+promo	-3	undervalued
+promo	-3	significant milestone
+promo	-3	exciting
+promo	-3	thrilled
+promo	-4	multi billion dollar
+promo	-4	letter to shareholders
+promo	-4	shareholder letter
+promo	-4	shareholder update
+promo	-4	ceo letter
+promo	-4	corporate update
+promo	-5	paid advertisement
+promo	-5	sponsored
+promo	-5	compensated
+# ---------------- negative outcomes ----------------
+neg	-20	did not meet
+neg	-20	failed to meet
+neg	-20	did not achieve
+neg	-18	complete response letter
+neg	-15	discontinue*
+neg	-12	terminat*
+neg	-12	withdraw*
+neg	-10	delay*
+neg	-10	misses
+neg	-10	lowers guidance
+neg	-10	cuts guidance
+neg	-8	resign*
+neg	-8	net loss
+neg	-8	impairment
+neg	-8	layoff*
+neg	-8	restructuring
+# ---------------- dilution (hard block) ----------------
+dilution	0	public offering
+dilution	0	registered direct offering
+dilution	0	registered direct
+dilution	0	private placement
+dilution	0	at the market offering
+dilution	0	at the market equity
+dilution	0	atm program
+dilution	0	atm facility
+dilution	0	equity line
+dilution	0	equity purchase agreement
+dilution	0	securities purchase agreement
+dilution	0	pricing of
+dilution	0	prices offering
+dilution	0	priced offering
+dilution	0	underwritten offering
+dilution	0	best efforts offering
+dilution	0	shelf registration
+dilution	0	convertible note*
+dilution	0	convertible preferred
+dilution	0	warrant inducement
+dilution	0	exercise of warrants
+dilution	0	warrant exercise
+dilution	0	gross proceeds
+dilution	0	net proceeds
+dilution	0	pipe financing
+dilution	0	unit offering
+dilution	0	rights offering
+# ---------------- distress ----------------
+distress	0	going concern
+distress	0	delisting
+distress	0	delisted
+distress	0	deficiency notice
+distress	0	deficiency letter
+distress	0	minimum bid price
+distress	0	notice of non compliance
+distress	0	not in compliance
+distress	0	chapter 11
+distress	0	chapter 7
+distress	0	bankruptcy
+distress	0	receivership
+distress	0	event of default
+distress	0	notice of default
+distress	0	forbearance
+distress	0	restatement
+distress	0	non reliance
+distress	0	wind down
+distress	0	liquidation
+# ---------------- reverse split ----------------
+rsplit	0	reverse stock split
+rsplit	0	reverse split
+rsplit	0	share consolidation
+# ---------------- spam / not company news ----------------
+spam	0	investor alert
+spam	0	shareholder alert
+spam	0	investor notice
+spam	0	class action lawsuit
+spam	0	securities class action
+spam	0	class action filed
+spam	0	securities fraud
+spam	0	lead plaintiff
+spam	0	law firm
+spam	0	law offices
+spam	0	investigation on behalf
+spam	0	encourages investors
+spam	0	rosen law
+spam	0	pomerantz
+spam	0	levi korsinsky
+spam	0	bragar eagel
+spam	0	faruqi
+spam	0	bronstein gewirtz
+spam	0	glancy prongay
+spam	0	robbins geller
+spam	0	kessler topaz
+spam	0	johnson fistel
+spam	0	schall law
+spam	0	gainey mckenna
+spam	0	kirby mcinerney
+spam	0	halper sadeh
+spam	0	portnoy law
+spam	0	howard g smith
+spam	0	block leviton

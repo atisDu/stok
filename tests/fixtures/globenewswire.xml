@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss xmlns:dc="http://purl.org/dc/elements/1.1/" version="2.0">
+  <channel>
+    <title>GlobeNewswire - News about Public Companies</title>
+    <link>https://www.globenewswire.com</link>
+    <description>Public company news</description>
+    <item>
+      <guid isPermaLink="false">3155123</guid>
+      <link>https://www.globenewswire.com/news-release/2026/09/25/3155123/0/en/Acme-Robotics-Signs-20-Million-Supply-Agreement-with-Walmart.html</link>
+      <category domain="https://www.globenewswire.com/rss/stock">Nasdaq:ACMR</category>
+      <category domain="https://www.globenewswire.com/rss/keyword">Contracts</category>
+      <title>Acme Robotics Signs $20 Million Supply Agreement with Walmart</title>
+      <description>&lt;p&gt;NEW YORK, Sept. 25, 2026 (GLOBE NEWSWIRE) -- Acme Robotics, Inc. (&amp;quot;Acme&amp;quot;) (NASDAQ: ACMR), a maker of warehouse robots, today announced that it has signed a definitive three-year supply agreement with Walmart Inc. valued at $20 million.&lt;/p&gt;</description>
+      <pubDate>Fri, 25 Sep 2026 12:00 GMT</pubDate>
+      <dc:identifier>3155123</dc:identifier>
+      <dc:language>en</dc:language>
+      <dc:publisher>Acme Robotics, Inc.</dc:publisher>
+      <dc:contributor>Acme Robotics, Inc.</dc:contributor>
+    </item>
+    <item>
+      <guid isPermaLink="false">3155100</guid>
+      <link>https://www.globenewswire.com/news-release/2026/09/25/3155100/0/en/Bravo-Bio-Announces-Pricing.html</link>
+      <category domain="https://www.globenewswire.com/rss/stock">Nasdaq:BRVO</category>
+      <title>Bravo Bio Announces Pricing of $5 Million Registered Direct Offering</title>
+      <description><![CDATA[<p>Bravo Bio, Inc. (Nasdaq: BRVO) today announced the pricing of a registered direct offering of 2,500,000 shares at $2.00 per share for gross proceeds of $5 million.</p>]]></description>
+      <pubDate>Fri, 25 Sep 2026 11:58 GMT</pubDate>
+    </item>
+    <item>
+      <guid isPermaLink="false">3155099</guid>
+      <link>https://www.globenewswire.com/news-release/2026/09/25/3155099/0/en/Law-Firm-Alert.html</link>
+      <title>INVESTOR ALERT: Rosen Law Firm Encourages Charlie Corp Investors to Secure Counsel</title>
+      <description>Rosen Law Firm reminds purchasers of Charlie Corp (NYSE: CHLY) securities of the class action lawsuit deadline.</description>
+      <pubDate>Fri, 25 Sep 2026 11:55 GMT</pubDate>
+    </item>
+  </channel>
+</rss>

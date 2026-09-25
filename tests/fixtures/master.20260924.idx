@@ -1,0 +1,15 @@
+Description:           Daily Index of EDGAR Dissemination Feed by Company Name
+Last Data Received:    September 24, 2026
+Comments:              webmaster@sec.gov
+Anonymous FTP:         ftp://ftp.sec.gov/edgar/
+
+
+
+
+CIK|Company Name|Form Type|Date Filed|File Name
+--------------------------------------------------------------------------------
+7654321|BRAVO BIO, INC.|424B5|20260924|edgar/data/7654321/0001104659-26-099999.txt
+7654321|BRAVO BIO, INC.|S-3|20260301|edgar/data/7654321/0001104659-26-020000.txt
+2222222|DELTA THERAPEUTICS, INC.|4|20260924|edgar/data/2222222/0000000000-26-000001.txt
+3333333|CHARLIE CORP|PRE 14A|20260924|edgar/data/3333333/0000000000-26-000002.txt
+5555555|SOME CO|10-Q|20260924|edgar/data/5555555/0000000000-26-000003.txt

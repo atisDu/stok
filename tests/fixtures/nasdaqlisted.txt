@@ -1,0 +1,9 @@
+Symbol|Security Name|Market Category|Test Issue|Financial Status|Round Lot Size|ETF|NextShares
+ACMR|Acme Robotics, Inc. - Common Stock|S|N|N|100|N|N
+ACMRW|Acme Robotics, Inc. - Warrant|S|N|N|100|N|N
+BRVO|Bravo Bio, Inc. - Common Stock|S|N|D|100|N|N
+DLTX|Delta Therapeutics, Inc. - Common Stock|G|N|N|100|N|N
+BIGC|Big Cap Corp - Class A Common Stock|Q|N|N|100|N|N
+QQQX|Some Nasdaq ETF|G|N|N|100|Y|N
+ZZZT|Test Issue Common Stock|S|Y|N|100|N|N
+File Creation Time: 0925202607:01|||||||
