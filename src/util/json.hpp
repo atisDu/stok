@@ -45,6 +45,9 @@ class JsonDoc {
   // Convenience: string value (unescaped) or empty.
   static std::string str(const Node* n);
   static double num(const Node* n, double def = 0.0);
+  // Exact integer (no double rounding): for ns timestamps and 64-bit ids.
+  static int64_t i64(const Node* n, int64_t def = 0);
+  static uint64_t u64(const Node* n, uint64_t def = 0);
 
  private:
   uint32_t parse_value(std::size_t& i, int depth);

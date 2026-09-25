@@ -18,6 +18,7 @@
 #include "core/log.hpp"
 #include "market/baseline.hpp"
 #include "market/itch_book.hpp"
+#include "market/itch_directory.hpp"
 #include "market/runner.hpp"
 #include "market/sources.hpp"
 #include "util/file.hpp"
@@ -26,44 +27,6 @@
 using namespace stok;
 
 namespace {
-
-// Pass 1 handler: collects the stock directory ('R' messages come first) so
-// replay works even without downloaded reference data.
-struct DirectoryCollector {
-  SymbolTable* symbols;
-  uint64_t seen = 0;
-  bool done = false;
-  void on_system_event(uint64_t, char) {}
-  void on_stock_directory(uint16_t, uint64_t, uint64_t key, char cat, char fin, uint32_t round_lot) {
-    ++seen;
-    if (symbols->find_key(key) != SymbolTable::kInvalid) return;
-    char sym[9];
-    std::memcpy(sym, &key, 8);
-    int n = 8;
-    while (n > 0 && sym[n - 1] == ' ') --n;
-    sym[n] = '\0';
-    SymbolInfo s;
-    s.ticker = sym;
-    s.key = key;
-    s.exchange = cat == 'Q' ? Exchange::NasdaqGS : cat == 'G' ? Exchange::NasdaqGM : cat == 'S' ? Exchange::NasdaqCM
-                 : cat == 'N' ? Exchange::NYSE : cat == 'A' ? Exchange::NYSEAmerican : cat == 'P' ? Exchange::NYSEArca
-                 : cat == 'Z' ? Exchange::CboeBZX : cat == 'V' ? Exchange::IEX : Exchange::Unknown;
-    s.financial_status = fin == ' ' ? 'N' : fin;
-    s.round_lot = round_lot;
-    symbols->add(std::move(s));
-  }
-  void on_trading_action(uint16_t, uint64_t, uint64_t, char, const char*) {}
-  void on_reg_sho(uint16_t, uint64_t, char) {}
-  void on_add(uint16_t, uint64_t, uint64_t, char, uint32_t, uint32_t) { done = true; }
-  void on_executed(uint16_t, uint64_t, uint64_t, uint32_t) {}
-  void on_executed_price(uint16_t, uint64_t, uint64_t, uint32_t, bool, uint32_t) {}
-  void on_cancel(uint16_t, uint64_t, uint64_t, uint32_t) {}
-  void on_delete(uint16_t, uint64_t, uint64_t) {}
-  void on_replace(uint16_t, uint64_t, uint64_t, uint64_t, uint32_t, uint32_t) {}
-  void on_trade(uint16_t, uint64_t, char, uint32_t, uint64_t, uint32_t) { done = true; }
-  void on_cross(uint16_t, uint64_t, uint64_t, uint64_t, uint32_t, char) {}
-  void on_broken(uint16_t, uint64_t, uint64_t) {}
-};
 
 }  // namespace
 
@@ -107,17 +70,13 @@ int main(int argc, char** argv) {
   if (!config_path.empty()) symbols.load_dir(s.ref_dir, &rep);
   {
     // Pass 1: stock directory.
-    ItchFileReader r;
     std::string err;
-    if (!r.open(file, &err)) {
+    const long added = add_itch_directory(file, symbols, &err);
+    if (added < 0) {
       std::fprintf(stderr, "%s\n", err.c_str());
       return 1;
     }
-    DirectoryCollector dc{&symbols};
-    std::atomic<bool> stop{false};
-    while (!dc.done && r.run(dc, stop, 0.0, 4096)) {
-    }
-    std::printf("symbols: %zu (%llu directory messages)\n", symbols.size(), static_cast<unsigned long long>(dc.seen));
+    std::printf("symbols: %zu (%ld from the ITCH stock directory)\n", symbols.size(), added);
   }
   if (date.empty()) date = itch_file_date(file);
   if (date.empty()) date = timeutil::eastern_date_str(static_cast<int64_t>(wall_ns()));

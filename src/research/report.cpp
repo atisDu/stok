@@ -134,7 +134,7 @@ JournalData load_journal(const std::string& dir, const std::string& from, const 
       r.catalyst = s(j, "catalyst");
       r.exit_reason = s(j, "exit_reason");
       r.score = static_cast<int>(n(j, "score"));
-      r.exit_ns = static_cast<uint64_t>(n(j, "exit_ns"));
+      r.exit_ns = JsonDoc::u64(j.get(j.root(), "exit_ns"));
       r.pnl_usd = n(j, "pnl_usd");
       r.pnl_pct = n(j, "pnl_pct");
       r.mfe = n(j, "mfe_pct");

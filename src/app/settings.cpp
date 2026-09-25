@@ -199,6 +199,10 @@ bool load_settings(const Config& cfg, Settings& s, std::string* err) {
   mo.write_baseline = m.get_bool("write_baseline", true);
   mo.busy_poll = m.get_bool("busy_poll", false);
   mo.baseline_dir = s.baseline_dir;
+  mo.record_itch = m.get_bool("record_itch", false);
+  mo.record_itch_dir = m.get_str("record_itch_dir", fileutil::join(s.data_dir, "itch"));
+  mo.record_tape = m.get_bool("record_tape", true);
+  mo.record_tape_dir = m.get_str("record_tape_dir", fileutil::join(s.data_dir, "tape"));
 
   // ---- alerts ----
   const auto& a = cfg.section("alerts");

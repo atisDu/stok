@@ -173,6 +173,19 @@ uint32_t FilingsHistory::flags(uint32_t cik, int32_t today, const DilutionPolicy
   return f;
 }
 
+FilingsHistory FilingsHistory::before(int32_t day) const {
+  FilingsHistory out;
+  for (const auto& [cik, v] : by_cik_)
+    for (const auto& e : v)
+      if (e.day < day) out.by_cik_[cik].push_back(e);
+  return out;
+}
+
+void FilingsHistory::merge(const FilingsHistory& other) {
+  for (const auto& [cik, v] : other.by_cik_)
+    for (const auto& e : v) add(cik, e.day, e.cls, e.items);
+}
+
 std::size_t FilingsHistory::add_master_index(std::string_view text) {
   std::size_t added = 0;
   bool in_data = false;

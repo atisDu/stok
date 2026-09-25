@@ -50,6 +50,7 @@ struct EngineConfig {
   // ---- timing ----
   uint64_t eval_interval_ns = 2'000'000;  // watchlist evaluation cadence
   bool busy_poll = false;
+  bool sim_time = false;             // backtests: signal timestamps follow the simulated clock
   int stats_interval_s = 60;
   DilutionPolicy dilution;
   std::vector<int> outcome_horizons_s = {60, 300, 900, 1800, 3600};
@@ -84,6 +85,8 @@ class Engine {
   void shutdown(uint64_t now_wall);
   const PaperTrader* paper() const { return paper_.get(); }
   std::size_t watch_count() const;
+  // Nothing to evaluate: no watched stories and no open paper positions.
+  bool idle() const { return active_.empty() && (!paper_ || paper_->open_positions() == 0); }
   std::string stats_report(bool reset);
 
   struct SourceStats {
@@ -130,7 +133,10 @@ class Engine {
   // True (and records the time) unless this ticker already produced this
   // tier within the cooldown window.
   bool cooled_down(uint32_t sym, Tier t, uint64_t now_wall);
-  Watch* alloc_watch();
+  // Takes a free slot (evicting the oldest story if all are in use), resets
+  // it, and indexes it by ticker.
+  Watch* activate_watch(uint32_t sym);
+  void deactivate_watch(std::size_t active_pos);
   int32_t today_days(uint64_t now_wall);
   double rvol_of(uint32_t sym, uint64_t day_volume, uint64_t now_wall) const;
   uint32_t soft_penalty_flags() const;
@@ -147,6 +153,9 @@ class Engine {
   std::vector<std::string> source_names_;
 
   std::vector<Watch> watch_;
+  std::vector<uint16_t> active_;           // slots in use (evaluate() walks only these)
+  std::vector<uint16_t> free_;             // unused slots
+  FlatMap64<uint16_t> watch_by_sym_{256};  // ticker -> slot
   std::unique_ptr<PaperTrader> paper_;
   struct FirstSeen {
     uint16_t source;

@@ -246,6 +246,22 @@ std::string JsonDoc::str(const Node* n) {
   return unescape(n->raw);
 }
 
+int64_t JsonDoc::i64(const Node* n, int64_t def) {
+  if (!n || (n->type != Type::Number && n->type != Type::String)) return def;
+  int64_t v = 0;
+  auto [p, ec] = std::from_chars(n->raw.data(), n->raw.data() + n->raw.size(), v);
+  if (ec != std::errc{}) return static_cast<int64_t>(num(n, static_cast<double>(def)));
+  return v;
+}
+
+uint64_t JsonDoc::u64(const Node* n, uint64_t def) {
+  if (!n || (n->type != Type::Number && n->type != Type::String)) return def;
+  uint64_t v = 0;
+  auto [p, ec] = std::from_chars(n->raw.data(), n->raw.data() + n->raw.size(), v);
+  if (ec != std::errc{}) return static_cast<uint64_t>(num(n, static_cast<double>(def)));
+  return v;
+}
+
 double JsonDoc::num(const Node* n, double def) {
   if (!n) return def;
   if (n->type == Type::Number) return n->number;

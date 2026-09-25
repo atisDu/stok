@@ -155,6 +155,9 @@ std::string Journal::news_json(const JournalRecord& r) const {
     j.str("market", e.halt.market);
     j.time("halt_time", e.halt.halt_ns);
     j.time("resume_trade", e.halt.resume_trade_ns);
+    j.integer("halt_ns", e.halt.halt_ns);
+    j.integer("resume_quote_ns", e.halt.resume_quote_ns);
+    j.integer("resume_trade_ns", e.halt.resume_trade_ns);
     if (e.halt.pause_threshold > 0) j.num("pause_threshold", e.halt.pause_threshold);
   } else {
     const ScoreResult& s = r.score;
@@ -190,8 +193,8 @@ std::string Journal::news_json(const JournalRecord& r) const {
     j.str("first_src", source_name(r.first_source));
     j.num("behind_first_ms", static_cast<double>(r.first_seen_lag_ns) / 1e6, 1);
   }
-  const std::string_view body = e.body.view();
-  j.str("body", body.substr(0, std::min<std::size_t>(body.size(), 600)));
+  // The full body is kept so the journal can be replayed by stok-backtest.
+  j.str("body", e.body.view());
   return j.done();
 }
 

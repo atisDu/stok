@@ -11,6 +11,7 @@
 #include "core/common.hpp"
 #include "market/board.hpp"
 #include "market/itch.hpp"
+#include "market/recorder.hpp"
 #include "ref/symbols.hpp"
 
 typedef struct gzFile_s* gzFile;
@@ -137,6 +138,9 @@ class MoldUdp64Receiver {
     opts_.retry_ms = retry_ms;
     opts_.max_request = max_request;
   }
+  // Every message applied to the book (in sequence, after gap recovery) is
+  // also handed to the recorder.
+  void set_recorder(ItchRecorder* r) { recorder_ = r; }
   const Stats& stats() const { return st_; }
   bool session_ended() const { return ended_; }
   bool recovering() const { return recovering_; }
@@ -165,6 +169,7 @@ class MoldUdp64Receiver {
   uint64_t last_request_ = 0;
   std::map<uint64_t, std::vector<uint8_t>> pending_;  // seq -> raw packet (only during recovery)
   RequestFn request_fn_;
+  ItchRecorder* recorder_ = nullptr;
   Stats st_;
   std::vector<uint8_t> bufs_;
   std::vector<unsigned> lens_;
@@ -188,6 +193,7 @@ void MoldUdp64Receiver::process(const uint8_t* p, std::size_t n, H& h, uint64_t 
     if (i >= skip) {
       ++st_.messages;
       if (!itch::decode(p + off, mlen, h)) ++st_.bad;
+      if (recorder_) recorder_->push(p + off, mlen);
     }
     off += mlen;
   }
@@ -324,12 +330,16 @@ class BridgeReceiver {
   int poll(const SymbolTable& symbols, MarketBoard& board, int timeout_ms,
            void (*on_state)(void*, uint32_t, char, const char*, int64_t) = nullptr, void* ctx = nullptr);
   // Parses one datagram (exposed for tests).
+  // `default_ts` (epoch ns) stamps lines that carry no timestamp; 0 = now.
   void handle(std::string_view text, const SymbolTable& symbols, MarketBoard& board,
-              void (*on_state)(void*, uint32_t, char, const char*, int64_t), void* ctx);
+              void (*on_state)(void*, uint32_t, char, const char*, int64_t), void* ctx, int64_t default_ts = 0);
   const Stats& stats() const { return st_; }
+  // Tape recording: every valid line is appended as "<epoch_ns> <line>".
+  void set_tape(FILE* f) { tape_ = f; }
 
  private:
   int fd_ = -1;
+  FILE* tape_ = nullptr;
   Stats st_;
 };
 

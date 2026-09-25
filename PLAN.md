@@ -29,7 +29,8 @@ The infrastructure is built as a C++20 engine that relies on external services a
 | Top of book + spread filter | Done (price ladders from ITCH order messages; bridge `Q` lines) |
 | Paper trading + go/no-go report | Done (local simulator in the engine; `stok-report`) |
 | MoldUDP64 gap recovery, company-name matching | Done |
-| Historical backtest harness | Next (Phase 4 below) |
+| Historical backtest harness | Done (`stok-backtest`: recorded news × ITCH files / quote tapes, same engine and paper trader, sweeps with an out-of-sample split) |
+| Recording + historical news | Done (`stokd` records ITCH/tapes; `stok-history` rebuilds past days' filings news from EDGAR archives) |
 
 ---
 
@@ -210,6 +211,7 @@ news_score 84 · received 08:02:11 ET (Accesswire) · 8-K pending
 - Lock-free **SPSC/MPSC rings**, per-symbol **seqlocks**, pinned threads, eventfd wake-ups or busy-polling
 - **Nasdaq TotalView-ITCH 5.0** decoder with **MoldUDP64** receiver (the exchange's official protocol); file replay; UDP bridge
 - **JSONL journal** instead of Postgres (append-only, off the hot path; query with DuckDB/pandas)
+- **Backtester** that drives the production engine and paper trader on a simulated clock; no separate research code path to drift from live
 - **Telegram Bot API** over a pre-warmed keep-alive connection; UDP JSON for dashboards
 - Deployment: one VPS in US-East, systemd unit in `deploy/`
 
@@ -255,12 +257,12 @@ Assumes one developer working part-time. Weeks overlap.
 | **1. Aggregator MVP** | 1–3 | EDGAR, wire RSS and halt ingestion, dedupe, ticker mapping, journal, alerts | **Done**. Run `stokd --probe` on your server to verify the feed URLs and measure latency. |
 | **2. Scoring** | 3–5 | Rule scorer, enrichment (shares, float, dilution/distress flags), news_score | **Done**. Next: hand-label 300 releases from the journal and tune `rules.tsv`. |
 | **3. Market confirmation** | 5–7 | ITCH/bridge market data, RVOL/VWAP, gainer scanner, tiered alerts | **Done**. Needs an ITCH subscription or a bridged feed for live prices. |
-| **4. Outcome tracking and backtest** | 5–10 | Outcome tracker and `stok-report` (done); replaying recorded news against historical ITCH (next) | In progress |
+| **4. Outcome tracking and backtest** | 5–10 | Outcome tracker, `stok-report`, `stok-backtest` (recorded news × historical ITCH/tapes), `stok-history` (EDGAR-rebuilt news) | **Built**. Needs recorded days (or ITCH files) to say anything. |
 | **5. Paper trading** | 10–20 | Paper orders from signals under fixed rules, weekly report | **Built** (`[paper]` + `stok-report`). Needs 8+ weeks of live data. |
 | **6. Dashboard (optional)** | anytime after 3 | Web UI over the journal + UDP signal feed | Not started |
 | **7. Small live trading** | only if Phase 5 passes | Semi-automatic execution with the risk limits from §6 | Not started |
 
-Phases 1–3 give you a working alert tool in about 6–7 weeks. The profitability answer takes until about week 20, because it needs months of live-recorded data. Historical news with accurate receive-time timestamps is hard to get cheaply.
+Phases 1–3 give you a working alert tool in about 6–7 weeks. The profitability answer takes until about week 20, because it needs months of live-recorded data. Historical news with accurate receive-time timestamps is hard to get cheaply. EDGAR's acceptance timestamps (`stok-history`) are a free partial substitute for filed news, but wire-only stories and a paid ITCH history are the gaps.
 
 ---
 
@@ -316,10 +318,11 @@ Phases 1–3 give you a working alert tool in about 6–7 weeks. The profitabili
 
 ## 12. Next step
 
-Phases 0–3 are implemented (see *Implementation status* at the top). Next:
+Phases 0–4 are implemented, and Phase 5's paper trader is built (see *Implementation status* at the top). Next:
 
 1. Deploy on a US-East VPS, set `net.user_agent`, run `stok-ref`, then `stokd --probe` to verify every feed URL and measure latency.
 2. Run news-only for 1–2 weeks. Use the per-source "first/behind" stats to keep the fastest sources, and hand-label 300 stories from `news.jsonl` to tune `config/rules.tsv`.
 3. Choose live market data: a Nasdaq ITCH subscription (the official path) or a bridged broker feed, then build the RVOL baseline.
 4. Turn on `[paper]` and let it run. Check `stok-report` weekly. Only the go/no-go checklist, not a good week, decides about real money.
-5. Build the Phase 4 historical backtest: replay recorded news against ITCH history with the same engine and paper trader.
+5. Keep `record_tape` (or `record_itch`) on, and backtest every week of recorded days with `stok-backtest`. Use `--news-delay-ms` to see how much of the result depends on being early, and `--sweep … --split` to tune on older days and judge on newer ones.
+6. For an early read before live data accumulates, rebuild a few past days with `stok-history` and backtest them on Nasdaq's free ITCH sample days. Treat that as a smoke test, not evidence: a handful of days is far below the 150-trade bar.

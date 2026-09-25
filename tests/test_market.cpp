@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "check.hpp"
+#include "core/ascii.hpp"
 #include "engine/engine.hpp"
 #include "fixture_symbols.hpp"
 #include "market/baseline.hpp"
@@ -469,4 +470,69 @@ TEST(moldudp64_socket_rerequest_roundtrip) {
   CHECK_EQ(rx.stats().messages, 18u);
   CHECK_EQ(board.hot(syms.find("ACMR")).day_volume, 6900u);
   ::close(srv);
+}
+
+TEST(itch_recorder_roundtrip_in_sequence) {
+  const SymbolTable syms = test::fixture_symbols();
+  const auto msgs = session().msgs;
+  const auto pk = mold_packets(msgs, {{0, 6}, {6, 6}, {12, 6}});
+  const std::string path = "build/test_tmp/rec/09252026.NASDAQ_ITCH50.gz";
+  std::filesystem::remove_all("build/test_tmp/rec");
+  fileutil::make_dirs("build/test_tmp/rec");
+  {
+    MarketBoard board(syms.size());
+    board.set_session_date(2026, 9, 25);
+    ItchBook book(syms, board, nullptr, nullptr, 64);
+    ItchRecorder rec;
+    std::string err;
+    CHECK(rec.start(path, &err));
+    MoldUdp64Receiver rx;
+    rx.set_recorder(&rec);
+    rx.enable_recovery([](const char*, uint64_t, uint16_t) {}, 250, 50);
+    rx.on_packet(pk[0].data(), pk[0].size(), book, 1);
+    rx.on_packet(pk[2].data(), pk[2].size(), book, 2);  // out of order: buffered, not recorded yet
+    rx.on_packet(pk[1].data(), pk[1].size(), book, 3);  // gap filled: 7-12 then 13-18 applied in order
+    rec.stop();
+    CHECK_EQ(rec.written(), 18u);
+    CHECK_EQ(rec.dropped(), 0u);
+  }
+  MarketBoard board(syms.size());
+  board.set_session_date(2026, 9, 25);
+  ItchBook book(syms, board, nullptr, nullptr, 64);
+  ItchFileReader r;
+  std::string err;
+  CHECK(r.open(path, &err));
+  std::atomic<bool> stop{false};
+  while (r.run(book, stop)) {
+  }
+  CHECK_EQ(r.stats().messages, 18u);
+  CHECK_EQ(board.hot(syms.find("ACMR")).day_volume, 6900u);
+  CHECK_EQ(book.stats().unknown_ref, 0u);  // recorded strictly in sequence
+}
+
+TEST(bridge_tape_recording) {
+  const SymbolTable syms = test::fixture_symbols();
+  MarketBoard board(syms.size());
+  board.set_session_date(2026, 9, 25);
+  const std::string path = "build/test_tmp/rec/2026-09-25.tape";
+  fileutil::make_dirs("build/test_tmp/rec");
+  std::remove(path.c_str());
+  FILE* f = std::fopen(path.c_str(), "a");
+  BridgeReceiver b;
+  b.set_tape(f);
+  const int64_t ts = timeutil::eastern_midnight_ns(2026, 9, 25) + static_cast<int64_t>(at(10, 0));
+  b.handle("T ACMR 2.40 1000 " + std::to_string(ts) + "\nQ ACMR 2.39 100 2.41 200\nH ACMR H LUDP\nT NOPE 1 1\n",
+           syms, board, nullptr, nullptr, ts + 5);
+  std::fclose(f);
+  const auto tape = fileutil::read_file(path).value_or("");
+  std::vector<std::string> lines;
+  for_each_line(tape, [&](std::string_view l) {
+    if (!l.empty()) lines.emplace_back(l);
+  });
+  CHECK_EQ(lines.size(), 3u);  // invalid line not recorded
+  if (lines.size() == 3) {
+    CHECK(lines[0].rfind(std::to_string(ts) + " T ACMR 2.40 1000", 0) == 0);
+    CHECK(lines[1].rfind(std::to_string(ts + 5) + " Q ACMR", 0) == 0);  // stamped with receive time
+    CHECK(lines[2].rfind(std::to_string(ts + 5) + " H ACMR H LUDP", 0) == 0);
+  }
 }

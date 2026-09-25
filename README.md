@@ -31,6 +31,7 @@ exists.
 | **Confirm** | Price and volume from exchange data: move since the news, dollar volume since the news, RVOL against a self-built baseline, VWAP, halts, and the bid/ask spread from price ladders built out of ITCH order messages. |
 | **Signal** | `WATCH` (material news) → `ALERT` (the stock is moving on volume) → `HIGH` (strong score, small share count, clean filings, above VWAP). Also `HALT`, `MOVER` (big mover with no qualifying news) and `INFO` (an offering filed on a watched ticker). |
 | **Paper trade** | Optional local simulator: buys at the ask after a set latency, sells at the bid, with slippage and fees. Exits on stop, target, trailing stop, time limit or flat-by time. It can't exit during halts. Risk limits cap position size, open positions and daily loss. |
+| **Backtest** | `stok-backtest` replays recorded news against historical ITCH files or recorded quote tapes through the same engine and paper trader, on a simulated clock. It includes parameter sweeps with an in-sample/out-of-sample split. `stok-history` rebuilds past days' news from EDGAR's archives, stamped at the SEC acceptance time. |
 | **Measure** | JSONL journal of every item, with per-source arrival times, cross-source "who had it first" stats, price/volume at +1/5/15/30/60 minutes after every watched story, and every paper trade. `stok-report` turns it into per-source, per-tier and per-catalyst results, plus a go/no-go verdict. |
 
 ## Official data sources
@@ -114,6 +115,12 @@ For live ITCH, set `mold_rerequest` to Nasdaq's re-request server. Missed packet
 are then re-requested and replayed in order, so the order book stays exact.
 Start the daemon before 04:00 ET so the book is built from the first message.
 
+`stokd` records what it sees so every live day can be backtested later:
+`record_tape = true` writes bridge input to `data/tape/YYYY-MM-DD.tape`, and
+`record_itch = true` writes the raw ITCH stream to
+`data/itch/MMDDYYYY.NASDAQ_ITCH50.gz` (several GB a day) on its own thread, off
+the hot path.
+
 Build the RVOL baseline from history with
 `./build/stok-replay data/itch/<file>.gz --baseline -c config/stok.conf`. The
 daemon also appends each live session to it at the end of the day.
@@ -125,6 +132,8 @@ daemon also appends each live session to it at the end of the day.
 | `stokd` | The daemon (`--probe` checks the feeds and exits) |
 | `stok-ref` | Official reference-data downloader (Nasdaq Trader, SEC, FINRA) |
 | `stok-replay` | ITCH replay: throughput benchmark, most-active report, baseline builder |
+| `stok-backtest` | Replays recorded news against ITCH files / quote tapes with the live engine and paper trader; parameter sweeps |
+| `stok-history` | Rebuilds past days' news (8-K/6-K + EX-99 press releases, dilution filings) from EDGAR's archives |
 | `stok-report` | Journal analysis: which sources are first, outcomes by tier/catalyst/score, paper-trading stats, go/no-go verdict |
 | `stok-bench` | Microbenchmarks for every hot-path stage |
 | `stok-tests` | Unit tests (`stok-tests <filter>` runs a subset) |
@@ -141,6 +150,47 @@ JOIN 'data/journal/*/outcomes.jsonl' o ON o.news_id = n.id AND o.horizon_s = 300
 GROUP BY 1 ORDER BY stories DESC;
 ```
 
+## Backtest
+
+The backtester runs the real `Engine` and `PaperTrader` on a simulated clock.
+News and market messages are merged in time order, and the engine is evaluated
+every 10 ms of simulated time. A trade in the backtest is decided by the same
+code as a live one.
+
+```bash
+# Days you recorded live (data/journal + data/itch or data/tape):
+./build/stok-backtest -c config/stok.conf --from 2026-10-01 --to 2026-10-31
+
+# Days you never recorded: rebuild the news from EDGAR, backtest on Nasdaq's
+# free full-day ITCH samples (scripts/fetch_itch_sample.sh 01302019.NASDAQ_ITCH50.gz).
+./build/stok-ref -c config/stok.conf --only filings --days 3000   # dilution history back to that date
+./build/stok-history -c config/stok.conf --date 2019-01-30
+./build/stok-backtest -c config/stok.conf --news data/journal-edgar --day 2019-01-30
+
+# How sensitive is it to being late? The same day with news 30 s later:
+./build/stok-backtest -c config/stok.conf --news-delay-ms 30000
+
+# Parameter sweep, tuned on days before the split and judged on days after it:
+./build/stok-backtest -c config/stok.conf --sweep signal.watch_score=55,65,75 --split 2026-10-15
+```
+
+Output goes to `data/backtest/` (or `--out`) as a normal journal, with the
+`stok-report` summary and go/no-go verdict printed at the end. Results are
+deterministic: the same inputs give byte-identical output.
+
+What keeps it honest:
+* Timestamps are when *we* received each story (`recv_ns`), never when it says it was published.
+* Dilution flags only see filings from before the simulated day. Same-day filings
+  are learned intraday as they arrive, just as they would be live.
+* The RVOL baseline is rebuilt from the replayed days only, never from future ones.
+* Symbols come from each day's ITCH stock directory, so since-delisted tickers are
+  kept. EX-99 exchange tags resolve issuers missing from today's SEC map.
+* EDGAR-rebuilt news is stamped at acceptance + 30 s (`--delay-ms`), and it only
+  covers filings. Wire stories without an 8-K aren't in the archive, so record
+  news live for the full picture.
+
+Known gaps are listed in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#backtesting).
+
 ## Layout
 
 ```
@@ -148,11 +198,11 @@ src/core     lock-free SPSC/MPSC rings, seqlock, flat hash map, eventfd waker, a
 src/net      non-blocking HTTP/1.1 + TLS connection state machine, parser, inflater, DNS cache, client
 src/feeds    zero-copy RSS/Atom scanning, EDGAR/halts parsers, ticker extraction, feed poller
 src/ref      security master (Nasdaq Trader + SEC), filings history / dilution flags
-src/market   ITCH 5.0 decoder, order book + price ladders, seqlocked MarketBoard, MoldUDP64 (gap recovery)/file/bridge sources, baseline
+src/market   ITCH 5.0 decoder, order book + price ladders, seqlocked MarketBoard, MoldUDP64 (gap recovery)/file/bridge sources, recorder, baseline
 src/engine   rule scorer (Aho-Corasick), signal engine, paper trader
-src/research journal loader and report (stok-report)
+src/research backtester, news-journal loader, EDGAR history builder, report (stok-report)
 src/sink     JSONL journal, alerts (stdout / Telegram / UDP)
-src/app      stokd, stok-ref, stok-replay, settings
+src/app      stokd, stok-ref, stok-replay, stok-backtest, stok-history, stok-report, settings
 config/      stok.conf, rules.tsv
 tests/       unit tests, fixtures, integration test (local HTTPS server)
 ```

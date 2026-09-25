@@ -25,6 +25,8 @@ std::size_t PaperTrader::open_positions() const {
 }
 
 void PaperTrader::roll_day(uint64_t now) {
+  if (day_ != 0 && now >= day_checked_at_ && now - day_checked_at_ < 60 * kNsPerSec) return;
+  day_checked_at_ = now;
   int y;
   unsigned m, d;
   timeutil::eastern_date(static_cast<int64_t>(now), y, m, d);

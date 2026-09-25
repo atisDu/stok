@@ -86,6 +86,9 @@ class FilingsHistory {
   uint32_t flags(uint32_t cik, int32_t today, const DilutionPolicy& p = {}) const;
   const std::vector<Entry>* entries(uint32_t cik) const;
   std::size_t issuers() const { return by_cik_.size(); }
+  // Entries filed strictly before `day` (backtests: no same-day look-ahead).
+  FilingsHistory before(int32_t day) const;
+  void merge(const FilingsHistory& other);
 
   // EDGAR daily-index "master.YYYYMMDD.idx" (pipe-delimited:
   // CIK|Company Name|Form Type|Date Filed|Filename). Adds relevant rows.

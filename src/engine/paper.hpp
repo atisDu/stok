@@ -81,6 +81,7 @@ class PaperTrader {
   std::vector<Pos> pos_;
   Stats st_;
   int32_t day_ = 0;
+  uint64_t day_checked_at_ = 0;  // the ET date is re-derived at most once a minute
 };
 
 template <typename Sink>

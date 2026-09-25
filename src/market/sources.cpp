@@ -191,8 +191,10 @@ bool BridgeReceiver::open(const std::string& bind_addr, uint16_t port, std::stri
 }
 
 void BridgeReceiver::handle(std::string_view text, const SymbolTable& symbols, MarketBoard& board,
-                            void (*on_state)(void*, uint32_t, char, const char*, int64_t), void* ctx) {
+                            void (*on_state)(void*, uint32_t, char, const char*, int64_t), void* ctx,
+                            int64_t default_ts) {
   ++st_.datagrams;
+  const int64_t now_ts = default_ts ? default_ts : static_cast<int64_t>(wall_ns());
   for_each_line(text, [&](std::string_view line) {
     line = trim(line);
     if (line.empty()) return;
@@ -221,11 +223,12 @@ void BridgeReceiver::handle(std::string_view text, const SymbolTable& symbols, M
         ++st_.bad;
         return;
       }
-      const int64_t ts = n >= 5 ? parse_int<int64_t>(f[4]).value_or(0) : static_cast<int64_t>(wall_ns());
+      const int64_t ts = n >= 5 ? parse_int<int64_t>(f[4]).value_or(now_ts) : now_ts;
       const int64_t since_midnight = ts - board.midnight_ns();
       board.on_trade(sym, static_cast<int32_t>(*px * 1e4 + 0.5), *sz,
                      since_midnight > 0 ? static_cast<uint64_t>(since_midnight) : 0);
       ++st_.trades;
+      if (tape_) std::fprintf(tape_, "%lld %.*s\n", static_cast<long long>(ts), static_cast<int>(line.size()), line.data());
     } else if (f[0] == "Q" && n >= 6) {
       const auto bid = parse_double(f[2]);
       const auto bsz = parse_int<uint64_t>(f[3]);
@@ -235,18 +238,20 @@ void BridgeReceiver::handle(std::string_view text, const SymbolTable& symbols, M
         ++st_.bad;
         return;
       }
-      const int64_t ts = n >= 7 ? parse_int<int64_t>(f[6]).value_or(0) : static_cast<int64_t>(wall_ns());
+      const int64_t ts = n >= 7 ? parse_int<int64_t>(f[6]).value_or(now_ts) : now_ts;
       const int64_t since_midnight = ts - board.midnight_ns();
       board.on_quote(sym, static_cast<int32_t>(*bid * 1e4 + 0.5), *bsz, static_cast<int32_t>(*ask * 1e4 + 0.5), *asz,
                      since_midnight > 0 ? static_cast<uint64_t>(since_midnight) : 0);
       ++st_.quotes;
+      if (tape_) std::fprintf(tape_, "%lld %.*s\n", static_cast<long long>(ts), static_cast<int>(line.size()), line.data());
     } else if (f[0] == "H") {
       char reason[5] = {' ', ' ', ' ', ' ', '\0'};
       if (n >= 4)
         for (std::size_t k = 0; k < 4 && k < f[3].size(); ++k) reason[k] = f[3][k];
       board.on_trading_action(sym, f[2][0], reason);
-      if (on_state) on_state(ctx, sym, f[2][0], reason, static_cast<int64_t>(wall_ns()));
+      if (on_state) on_state(ctx, sym, f[2][0], reason, now_ts);
       ++st_.states;
+      if (tape_) std::fprintf(tape_, "%lld %.*s\n", static_cast<long long>(now_ts), static_cast<int>(line.size()), line.data());
     } else {
       ++st_.bad;
     }

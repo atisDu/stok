@@ -7,6 +7,7 @@
 #include "core/ascii.hpp"
 #include "core/clock.hpp"
 #include "core/log.hpp"
+#include "util/file.hpp"
 #include "util/time.hpp"
 
 namespace stok {
@@ -23,6 +24,11 @@ std::string itch_file_date(const std::string& path) {
 MarketRunner::MarketRunner(MarketOptions opts, const SymbolTable& symbols, MarketBoard& board,
                            SpscQueue<MarketEvent>& events, Waker* engine_waker)
     : opts_(std::move(opts)), symbols_(symbols), board_(board), events_(events), waker_(engine_waker) {}
+
+MarketRunner::~MarketRunner() {
+  if (recorder_) recorder_->stop();
+  if (tape_) std::fclose(tape_);
+}
 
 bool MarketRunner::init(std::string* err) {
   date_ = opts_.session_date;
@@ -45,9 +51,31 @@ bool MarketRunner::init(std::string* err) {
     auto mo = opts_.mold;
     mo.busy_poll = opts_.busy_poll;
     if (!mold_->open(mo, err)) return false;
+    if (opts_.record_itch && !opts_.record_itch_dir.empty()) {
+      fileutil::make_dirs(opts_.record_itch_dir);
+      int yy;
+      unsigned mm, dd;
+      timeutil::parse_ymd(date_, yy, mm, dd);
+      char name[64];
+      std::snprintf(name, sizeof(name), "%02u%02u%04d.NASDAQ_ITCH50.gz", mm, dd, yy);
+      recorder_ = std::make_unique<ItchRecorder>();
+      if (!recorder_->start(fileutil::join(opts_.record_itch_dir, name), err)) return false;
+      mold_->set_recorder(recorder_.get());
+      LOG_INFO("recording ITCH to %s", recorder_->path().c_str());
+    }
   } else if (opts_.source == "bridge") {
     bridge_ = std::make_unique<BridgeReceiver>();
     if (!bridge_->open(opts_.bridge_bind, opts_.bridge_port, err)) return false;
+    if (opts_.record_tape && !opts_.record_tape_dir.empty()) {
+      fileutil::make_dirs(opts_.record_tape_dir);
+      const std::string path = fileutil::join(opts_.record_tape_dir, date_ + ".tape");
+      tape_ = std::fopen(path.c_str(), "a");
+      if (tape_) {
+        std::setvbuf(tape_, nullptr, _IOFBF, 1 << 16);
+        bridge_->set_tape(tape_);
+        LOG_INFO("recording bridge tape to %s", path.c_str());
+      }
+    }
   } else if (opts_.source != "none") {
     if (err) *err = "unknown market.source '" + opts_.source + "'";
     return false;
@@ -106,7 +134,15 @@ void MarketRunner::run(const std::atomic<bool>& stop) {
     return;
   }
   if (bridge_) {
-    while (!stop.load(std::memory_order_relaxed)) bridge_->poll(symbols_, board_, 50, &MarketRunner::on_bridge_state, this);
+    uint64_t last_flush = mono_ns();
+    while (!stop.load(std::memory_order_relaxed)) {
+      bridge_->poll(symbols_, board_, 50, &MarketRunner::on_bridge_state, this);
+      if (tape_ && mono_ns() - last_flush > kNsPerSec) {
+        std::fflush(tape_);
+        last_flush = mono_ns();
+      }
+    }
+    if (tape_) std::fflush(tape_);
     // Bridge feeds have no end-of-day message: write the baseline if we are
     // shutting down after the close.
     if (timeutil::eastern_minute_of_day(static_cast<int64_t>(wall_ns())) >= 16 * 60 + 5) write_baseline();
@@ -126,6 +162,11 @@ std::string MarketRunner::stats_report() const {
                 (unsigned long long)b.halts, (unsigned long long)b.unknown_ref, book_ ? book_->live_orders() : 0,
                 (unsigned long long)b.max_orders);
   std::string out = buf;
+  if (recorder_) {
+    std::snprintf(buf, sizeof(buf), " | recorded=%llu dropped=%llu", (unsigned long long)recorder_->written(),
+                  (unsigned long long)recorder_->dropped());
+    out += buf;
+  }
   if (mold_) {
     const auto& m = mold_->stats();
     std::snprintf(buf, sizeof(buf),

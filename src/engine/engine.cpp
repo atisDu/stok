@@ -56,6 +56,9 @@ Engine::Engine(EngineConfig cfg, const SymbolTable& symbols, const MarketBoard* 
       journal_waker_(journal_waker),
       source_names_(std::move(source_names)) {
   watch_.resize(1024);
+  free_.reserve(watch_.size());
+  for (std::size_t i = watch_.size(); i-- > 0;) free_.push_back(static_cast<uint16_t>(i));
+  active_.reserve(watch_.size());
   src_stats_.resize(std::max<std::size_t>(1, source_names_.size() + 1));
   if (cfg_.paper.enabled && board_) paper_ = std::make_unique<PaperTrader>(cfg_.paper, symbols_, *board_);
   universe_static_.assign(symbols_.size(), 0);
@@ -115,26 +118,40 @@ bool Engine::cooled_down(uint32_t sym, Tier t, uint64_t now) {
 }
 
 Engine::Watch* Engine::find_watch(uint32_t sym) {
-  for (auto& w : watch_)
-    if (w.active && w.sym == sym) return &w;
-  return nullptr;
+  const uint16_t* idx = watch_by_sym_.find(sym);
+  return idx ? &watch_[*idx] : nullptr;
 }
 
-Engine::Watch* Engine::alloc_watch() {
-  for (auto& w : watch_)
-    if (!w.active) return &w;
-  // Full: evict the oldest.
-  Watch* oldest = &watch_[0];
-  for (auto& w : watch_)
-    if (w.t_news < oldest->t_news) oldest = &w;
-  return oldest;
+Engine::Watch* Engine::activate_watch(uint32_t sym) {
+  if (free_.empty()) {
+    // Full: evict the oldest story.
+    std::size_t oldest = 0;
+    for (std::size_t k = 1; k < active_.size(); ++k)
+      if (watch_[active_[k]].t_news < watch_[active_[oldest]].t_news) oldest = k;
+    deactivate_watch(oldest);
+  }
+  const uint16_t idx = free_.back();
+  free_.pop_back();
+  Watch& w = watch_[idx];
+  w = Watch{};
+  w.active = true;
+  w.sym = sym;
+  active_.push_back(idx);
+  watch_by_sym_.insert_or_assign(sym, idx);
+  return &w;
 }
 
-std::size_t Engine::watch_count() const {
-  std::size_t n = 0;
-  for (const auto& w : watch_) n += w.active ? 1 : 0;
-  return n;
+void Engine::deactivate_watch(std::size_t pos) {
+  const uint16_t idx = active_[pos];
+  Watch& w = watch_[idx];
+  watch_by_sym_.erase(w.sym);
+  w.active = false;
+  active_[pos] = active_.back();
+  active_.pop_back();
+  free_.push_back(idx);
 }
+
+std::size_t Engine::watch_count() const { return active_.size(); }
 
 void Engine::build_why(Watch& w, const ScoreResult& r, double mcap) {
   char buf[192];
@@ -170,7 +187,7 @@ void Engine::emit(const Watch& w, Tier tier, uint64_t now_wall, const char* halt
   s.dilution_flags = w.dilution_flags;
   s.news_id = w.news_id;
   s.t_news_recv_ns = w.t_news;
-  s.t_signal_ns = wall_ns();
+  s.t_signal_ns = cfg_.sim_time ? now_wall : wall_ns();
   s.published_ns = w.published_ns;
   s.amount_usd = w.amount_usd;
   s.materiality = w.materiality;
@@ -437,10 +454,7 @@ void Engine::on_news(const NewsEvent& ev, uint64_t now) {
     if (w && rs.score <= w->score) continue;  // keep the earlier/stronger story
     const bool fresh = w == nullptr;
     if (fresh) {
-      w = alloc_watch();
-      *w = Watch{};
-      w->active = true;
-      w->sym = sym;
+      w = activate_watch(sym);
       w->t_news = ev.recv_ns ? ev.recv_ns : now;
       w->ref_px = hot.last_px > 0 ? hot.last_px : static_cast<int32_t>(std::lround(info.prev_close * 1e4));
       w->vol_at_news = hot.day_volume;
@@ -520,11 +534,12 @@ void Engine::on_market_event(const MarketEvent& ev, uint64_t now) {
 
 void Engine::evaluate(uint64_t now) {
   const uint64_t window = static_cast<uint64_t>(cfg_.watch_window_s) * kNsPerSec;
-  for (auto& w : watch_) {
-    if (!w.active) continue;
+  // Backwards, so deactivate_watch()'s swap-remove never skips an entry.
+  for (std::size_t k = active_.size(); k-- > 0;) {
+    Watch& w = watch_[active_[k]];
     const uint64_t age = now > w.t_news ? now - w.t_news : 0;
     if (age > window) {
-      w.active = false;
+      deactivate_watch(k);
       continue;
     }
     if (!board_) continue;

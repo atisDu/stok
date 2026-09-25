@@ -62,7 +62,7 @@ class ItchBook {
     if (sym == SymbolTable::kInvalid) return;
     ++st_.adds;
     *orders_.try_emplace(ref).first = Order{price, shares, locate, side};
-    if (track_quotes_) {
+    if (quoted(sym)) {
       book_side(sym, side).add(price, shares);
       publish_top(sym, ts);
     }
@@ -105,10 +105,11 @@ class ItchBook {
     const char side = o->side;
     const uint16_t loc = o->locate;
     const uint32_t sym = locate_to_sym_[loc];
-    if (track_quotes_ && sym != SymbolTable::kInvalid) book_side(sym, side).remove(o->price, o->shares);
+    const bool q = sym != SymbolTable::kInvalid && quoted(sym);
+    if (q) book_side(sym, side).remove(o->price, o->shares);
     orders_.erase(old_ref);
     *orders_.try_emplace(new_ref).first = Order{price, shares, loc, side};
-    if (track_quotes_ && sym != SymbolTable::kInvalid) {
+    if (q) {
       book_side(sym, side).add(price, shares);
       publish_top(sym, ts);
     }
@@ -130,10 +131,18 @@ class ItchBook {
     if (orders_.size() > st_.max_orders) st_.max_orders = orders_.size();
   }
 
+  // Maintains price ladders / top of book only for symbols with mask[sym] != 0
+  // (orders, trades and volume are still tracked for every symbol). Backtests
+  // use it to skip quote work for the thousands of tickers without news.
+  void set_quote_filter(std::vector<uint8_t> mask) { filter_ = std::move(mask); }
+
   // Price ladders (tests / diagnostics).
   const LevelBook* book(uint32_t sym) const { return sym < books_.size() ? &books_[sym] : nullptr; }
 
  private:
+  STOK_ALWAYS_INLINE bool quoted(uint32_t sym) const {
+    return track_quotes_ && (filter_.empty() || filter_[sym]);
+  }
   STOK_ALWAYS_INLINE SideLadder& book_side(uint32_t sym, char side) {
     return side == 'B' ? books_[sym].bids : books_[sym].asks;
   }
@@ -154,9 +163,9 @@ class ItchBook {
 
   STOK_ALWAYS_INLINE void reduce(Order* o, uint64_t ref, uint32_t shares, uint64_t ts) {
     const uint32_t take = shares < o->shares ? shares : o->shares;
-    if (track_quotes_) {
+    {
       const uint32_t sym = locate_to_sym_[o->locate];
-      if (sym != SymbolTable::kInvalid) {
+      if (sym != SymbolTable::kInvalid && quoted(sym)) {
         book_side(sym, o->side).remove(o->price, take);
         publish_top(sym, ts);
       }
@@ -173,6 +182,7 @@ class ItchBook {
   std::array<char, 65536> last_state_;
   FlatMap64<Order> orders_;
   std::vector<LevelBook> books_;
+  std::vector<uint8_t> filter_;
   bool track_quotes_;
   Stats st_;
   char last_sys_ = 0;

@@ -145,6 +145,61 @@ quotes, so it adds no queues or locks.
 * paper-trading expectancy, profit factor, drawdown, and the result without the best three trades;
 * a PASS/FAIL checklist against the go/no-go criteria in PLAN.md section 5.
 
+## Backtesting
+
+`stok-backtest` doesn't reimplement any trading logic. It drives the production
+`Engine` and `PaperTrader` with `sim_time` on, so "now" is the timestamp of the
+message being replayed rather than the wall clock.
+
+* **Time merge.** For each day it loads that day's `news.jsonl` (sorted by
+  `recv_ns`, optionally shifted by `--news-delay-ms`) and streams the market data.
+  Before each market message, all news received up to that moment is handed to
+  the engine. The engine's evaluate step runs every `--eval-ms` (default 10 ms)
+  of simulated time, as its timer would live. Paper orders fill after their
+  simulated latency, against the quotes in the replayed book at that moment.
+* **Market input.** Either a raw Nasdaq ITCH 5.0 file (`MMDDYYYY.NASDAQ_ITCH50[.gz]`,
+  recorded by `stokd` or one of Nasdaq's samples) through the same decoder and
+  order book as live, or a tape of bridge lines (`<epoch_ns> T|Q|H ...`). Top of
+  book is only published for tickers that have news that day. Every order is still
+  tracked, so volumes and the book stay exact, but quote updates for thousands of
+  unrelated symbols are skipped. That's where most of the replay time would go.
+* **Look-ahead controls.**
+  * The engine sees filings history strictly before the simulated day. Same-day
+    filings are added as their news arrives, then merged back for later days.
+  * The volume baseline starts from the configured one, and each replayed day is
+    appended after it finishes.
+  * Symbols are today's security master plus the day's ITCH stock directory,
+    so tickers that have since been delisted are tradable.
+  * News is re-resolved to symbols by ticker string, not by table index.
+* **Recording.** `stokd` writes the full news stream to the journal and, if
+  enabled, raw ITCH to a gzip file through a dedicated recorder thread. The
+  market thread only copies each message into an SPSC ring; it never blocks. If
+  the ring fills, messages are dropped from the recording (counted), never from
+  the live book. Bridge input (text over UDP, far below ITCH rates) is appended
+  to a tape file with buffered writes on the market thread.
+* **EDGAR history** (`stok-history`). For a past date it reads EDGAR's daily
+  `master.idx`, then each 8-K/6-K (plus 424B/S-1/S-3/EFFECT) filing index page
+  for the acceptance timestamp and items, then the EX-99 exhibit. Filings are
+  stamped `accepted + 30 s` and exhibits 2 s later. Pages are cached on disk and
+  fetched at under 8 requests/s (SEC fair access).
+* **Sweeps.** `--sweep section.key=v1,v2,...` reruns the whole period for each
+  value into its own output directory. With `--split DAY`, the table shows profit
+  factor before and after the split, so a value that only works in-sample is visible.
+* **Determinism.** No wall-clock reads or thread timing affect the result. Identical
+  inputs produce byte-identical journals, and a test checks this.
+
+Known gaps:
+* Market cap uses today's shares outstanding (XBRL frames), not the count on the
+  day. For issuers that have diluted heavily since, historical market cap is overstated.
+* The SEC ticker↔CIK map is current. An issuer that has since been delisted or
+  renamed only gets a ticker through its press release's exchange tag.
+* EDGAR history covers filings only. Wire-only stories (most small-cap PRs are
+  also filed as 8-K EX-99, but not all) need live recording.
+* Top of book from ITCH is Nasdaq's book, not the NBBO, and fills assume the size
+  at the touch is available (`size_over_touch` flags the rest).
+* The acceptance-plus-delay stamp approximates when EDGAR's feed showed a filing.
+  Compare it with live `pub_to_recv_ms` from your own journal and adjust `--delay-ms`.
+
 ## OS tuning for production
 
 * Kernel command line: `isolcpus=2-4 nohz_full=2-4 rcu_nocbs=2-4`. Then pin
@@ -166,5 +221,7 @@ quotes, so it adds no queues or locks.
   matches listed issuers, skips ambiguous names, and flags matches (`name_matched`)
   so they can be judged separately.
 * Paper fills assume the displayed size at the touch is available (see above).
+* Backtests are only as good as the recorded inputs. See the known gaps under
+  [Backtesting](#backtesting).
 * The rule weights are starting guesses. Tune them against the journal
   (`news.jsonl` joined to `outcomes.jsonl`) before trusting any tier.

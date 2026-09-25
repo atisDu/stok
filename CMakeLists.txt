@@ -60,11 +60,15 @@ add_library(stok_core STATIC
   src/market/baseline.cpp
   src/market/board.cpp
   src/market/itch_book.cpp
+  src/market/recorder.cpp
   src/market/runner.cpp
   src/market/sources.cpp
   src/engine/engine.cpp
   src/engine/paper.cpp
   src/engine/scorer.cpp
+  src/research/backtest.cpp
+  src/research/edgar_history.cpp
+  src/research/news_loader.cpp
   src/research/report.cpp
   src/sink/alerts.cpp
   src/sink/journal.cpp
@@ -84,6 +88,12 @@ target_link_libraries(stok-replay PRIVATE stok_core)
 
 add_executable(stok-report src/app/stok_report.cpp)
 target_link_libraries(stok-report PRIVATE stok_core)
+
+add_executable(stok-backtest src/app/stok_backtest.cpp)
+target_link_libraries(stok-backtest PRIVATE stok_core)
+
+add_executable(stok-history src/app/stok_history.cpp)
+target_link_libraries(stok-history PRIVATE stok_core)
 
 add_executable(stok-bench bench/bench.cpp)
 target_link_libraries(stok-bench PRIVATE stok_core)

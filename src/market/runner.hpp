@@ -10,6 +10,7 @@
 #include "market/baseline.hpp"
 #include "market/board.hpp"
 #include "market/itch_book.hpp"
+#include "market/recorder.hpp"
 #include "market/sources.hpp"
 #include "ref/symbols.hpp"
 
@@ -28,6 +29,10 @@ struct MarketOptions {
   std::string baseline_dir;      // where history.tsv / baseline.tsv live
   bool write_baseline = true;    // append the session at end of day
   bool busy_poll = false;
+  bool record_itch = false;      // record the live ITCH feed (several GB/day, gzip)
+  std::string record_itch_dir;   // -> MMDDYYYY.NASDAQ_ITCH50.gz (what stok-backtest --itch reads)
+  bool record_tape = true;       // record bridge input
+  std::string record_tape_dir;   // -> YYYY-MM-DD.tape (what stok-backtest --tape reads)
 };
 
 // Owns the market-data thread's source and applies it to the MarketBoard.
@@ -35,6 +40,7 @@ class MarketRunner {
  public:
   MarketRunner(MarketOptions opts, const SymbolTable& symbols, MarketBoard& board, SpscQueue<MarketEvent>& events,
                Waker* engine_waker);
+  ~MarketRunner();
 
   bool init(std::string* err);
   void run(const std::atomic<bool>& stop);
@@ -57,6 +63,8 @@ class MarketRunner {
   std::unique_ptr<ItchFileReader> file_;
   std::unique_ptr<MoldUdp64Receiver> mold_;
   std::unique_ptr<BridgeReceiver> bridge_;
+  std::unique_ptr<ItchRecorder> recorder_;
+  FILE* tape_ = nullptr;
   bool baseline_written_ = false;
   bool file_done_ = false;
 };
