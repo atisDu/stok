@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <memory>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -10,6 +11,7 @@
 #include "core/spsc_queue.hpp"
 #include "core/waker.hpp"
 #include "engine/events.hpp"
+#include "engine/paper.hpp"
 #include "engine/scorer.hpp"
 #include "engine/signals.hpp"
 #include "market/board.hpp"
@@ -31,6 +33,7 @@ struct EngineConfig {
   double alert_move_pct = 8.0;
   double alert_rvol = 5.0;
   double alert_dollar_volume = 300e3;
+  double alert_max_spread_pct = 3.0;  // 0 = off; ignored while no valid quote
   double high_max_shares = 30e6;
   bool high_require_above_vwap = true;
   int watch_window_s = 90 * 60;
@@ -50,6 +53,7 @@ struct EngineConfig {
   int stats_interval_s = 60;
   DilutionPolicy dilution;
   std::vector<int> outcome_horizons_s = {60, 300, 900, 1800, 3600};
+  PaperConfig paper;
 };
 
 // Fraction of a typical day's volume traded by `minute_of_day` (ET),
@@ -76,6 +80,9 @@ class Engine {
   void scan_movers(uint64_t now_wall);
 
   bool in_universe(uint32_t sym, double price, double* mcap_out = nullptr) const;
+  // Closes paper positions at current marks (called when the engine stops).
+  void shutdown(uint64_t now_wall);
+  const PaperTrader* paper() const { return paper_.get(); }
   std::size_t watch_count() const;
   std::string stats_report(bool reset);
 
@@ -117,6 +124,7 @@ class Engine {
                    const char* title);
   void emit(const Watch& w, Tier tier, uint64_t now_wall, const char* halt_reason = nullptr);
   void journal_outcome(const Watch& w, uint32_t horizon_s, uint64_t now_wall, const MarketHot& h, double move);
+  void journal_trade(const PaperTrade& t);
   void build_why(Watch& w, const ScoreResult& r, double mcap);
   Watch* find_watch(uint32_t sym);
   // True (and records the time) unless this ticker already produced this
@@ -139,6 +147,7 @@ class Engine {
   std::vector<std::string> source_names_;
 
   std::vector<Watch> watch_;
+  std::unique_ptr<PaperTrader> paper_;
   struct FirstSeen {
     uint16_t source;
     uint64_t recv_ns;

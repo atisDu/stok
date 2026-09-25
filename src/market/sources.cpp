@@ -84,6 +84,27 @@ bool MoldUdp64Receiver::open(const Options& o, std::string* err) {
     if (err) *err = "bind failed: " + std::string(std::strerror(errno));
     return false;
   }
+  opts_ = o;
+  if (!o.rerequest.empty()) {
+    // Requests go out on the same socket, so the server's unicast replies
+    // arrive through the normal receive path.
+    const auto colon = o.rerequest.rfind(':');
+    sockaddr_in rr{};
+    rr.sin_family = AF_INET;
+    if (colon == std::string::npos || inet_pton(AF_INET, o.rerequest.substr(0, colon).c_str(), &rr.sin_addr) != 1) {
+      if (err) *err = "bad mold rerequest address " + o.rerequest;
+      return false;
+    }
+    rr.sin_port = htons(static_cast<uint16_t>(std::stoi(o.rerequest.substr(colon + 1))));
+    const int fd = fd_;
+    request_fn_ = [fd, rr](const char* session, uint64_t seq, uint16_t count) {
+      uint8_t req[20];
+      std::memcpy(req, session, 10);
+      itch::enc::put64(req + 10, seq);
+      itch::enc::put16(req + 18, count);
+      ::sendto(fd, req, sizeof(req), MSG_DONTWAIT, reinterpret_cast<const sockaddr*>(&rr), sizeof(rr));
+    };
+  }
   if (!o.group.empty()) {
     ip_mreq mreq{};
     if (inet_pton(AF_INET, o.group.c_str(), &mreq.imr_multiaddr) != 1) {
@@ -101,6 +122,24 @@ bool MoldUdp64Receiver::open(const Options& o, std::string* err) {
     }
   }
   return true;
+}
+
+uint16_t MoldUdp64Receiver::local_port() const {
+  sockaddr_in a{};
+  socklen_t len = sizeof(a);
+  if (fd_ < 0 || getsockname(fd_, reinterpret_cast<sockaddr*>(&a), &len) != 0) return 0;
+  return ntohs(a.sin_port);
+}
+
+void MoldUdp64Receiver::request_gap(uint64_t now) {
+  if (!request_fn_) return;
+  const uint64_t end = pending_.empty() ? gap_end_ : pending_.begin()->first;
+  if (end <= expected_seq_) return;
+  const uint64_t want = end - expected_seq_;
+  const uint16_t count = static_cast<uint16_t>(want < opts_.max_request ? want : opts_.max_request);
+  request_fn_(session_, expected_seq_, count);
+  ++st_.requests;
+  last_request_ = now;
 }
 
 int MoldUdp64Receiver::recv_batch(int timeout_ms) {
@@ -157,10 +196,10 @@ void BridgeReceiver::handle(std::string_view text, const SymbolTable& symbols, M
   for_each_line(text, [&](std::string_view line) {
     line = trim(line);
     if (line.empty()) return;
-    std::string_view f[5];
+    std::string_view f[7];
     int n = 0;
     std::size_t i = 0;
-    while (i < line.size() && n < 5) {
+    while (i < line.size() && n < 7) {
       while (i < line.size() && is_space(line[i])) ++i;
       const std::size_t b = i;
       while (i < line.size() && !is_space(line[i])) ++i;
@@ -187,6 +226,20 @@ void BridgeReceiver::handle(std::string_view text, const SymbolTable& symbols, M
       board.on_trade(sym, static_cast<int32_t>(*px * 1e4 + 0.5), *sz,
                      since_midnight > 0 ? static_cast<uint64_t>(since_midnight) : 0);
       ++st_.trades;
+    } else if (f[0] == "Q" && n >= 6) {
+      const auto bid = parse_double(f[2]);
+      const auto bsz = parse_int<uint64_t>(f[3]);
+      const auto ask = parse_double(f[4]);
+      const auto asz = parse_int<uint64_t>(f[5]);
+      if (!bid || !bsz || !ask || !asz) {
+        ++st_.bad;
+        return;
+      }
+      const int64_t ts = n >= 7 ? parse_int<int64_t>(f[6]).value_or(0) : static_cast<int64_t>(wall_ns());
+      const int64_t since_midnight = ts - board.midnight_ns();
+      board.on_quote(sym, static_cast<int32_t>(*bid * 1e4 + 0.5), *bsz, static_cast<int32_t>(*ask * 1e4 + 0.5), *asz,
+                     since_midnight > 0 ? static_cast<uint64_t>(since_midnight) : 0);
+      ++st_.quotes;
     } else if (f[0] == "H") {
       char reason[5] = {' ', ' ', ' ', ' ', '\0'};
       if (n >= 4)

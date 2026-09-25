@@ -79,6 +79,76 @@ bool SymbolInfo::is_derivative_security() const {
          has_word(name, "units") || has_word(name, "right") || has_word(name, "rights");
 }
 
+std::string SymbolTable::normalize_company_name(std::string_view name) {
+  // Nasdaq security names look like "Acme Robotics, Inc. - Common Stock".
+  if (const auto dash = name.find(" - "); dash != std::string_view::npos) name = name.substr(0, dash);
+  std::vector<std::string> words;
+  std::string cur;
+  auto flush = [&] {
+    if (!cur.empty()) words.push_back(std::move(cur));
+    cur.clear();
+  };
+  for (char c : name) {
+    if (is_alnum(c)) cur.push_back(to_upper(c));
+    else if (c == '&') {
+      flush();
+      words.push_back("AND");
+    } else if (c == '\'' || c == '.') {
+      // "Macy's" -> MACYS, "U.S." -> US
+    } else {
+      flush();
+    }
+  }
+  flush();
+  static const char* kSuffix[] = {"INC",   "INCORPORATED", "CORP", "CORPORATION", "CO",   "COMPANY", "LTD",
+                                  "LIMITED", "PLC",        "LLC",  "LP",          "HOLDINGS", "HOLDING", "GROUP",
+                                  "SA",    "NV",           "AG",   "SE",          "ADR",  "ADS",     "THE",
+                                  "COMMON", "STOCK",       "SHARES", "ORDINARY",  "CLASS", "A",      "B"};
+  auto is_suffix = [&](const std::string& w) {
+    for (const char* s : kSuffix)
+      if (w == s) return true;
+    return false;
+  };
+  while (words.size() > 1 && is_suffix(words.back())) words.pop_back();
+  if (words.size() > 1 && words.front() == "THE") words.erase(words.begin());
+  std::string out;
+  for (const auto& w : words) {
+    if (!out.empty()) out.push_back(' ');
+    out += w;
+  }
+  return out;
+}
+
+void SymbolTable::build_name_index() {
+  by_name_.clear();
+  std::unordered_map<uint64_t, uint32_t> owner_cik;  // name hash -> cik (0 = unknown issuer)
+  for (uint32_t id = 0; id < syms_.size(); ++id) {
+    const SymbolInfo& s = syms_[id];
+    if (!is_exchange_listed(s.exchange) || s.etf || s.test_issue || s.is_derivative_security() || s.name.empty())
+      continue;
+    const uint32_t primary = s.cik ? primary_for_cik(s.cik) : id;
+    if (primary != id) continue;
+    const std::string n = normalize_company_name(s.name);
+    if (n.size() < 4) continue;
+    const uint64_t h = hash_sv(n);
+    auto [slot, inserted] = by_name_.try_emplace(h);
+    if (inserted) {
+      *slot = id;
+      owner_cik[h] = s.cik;
+    } else if (*slot != kAmbiguous && (owner_cik[h] != s.cik || s.cik == 0)) {
+      *slot = kAmbiguous;
+    }
+  }
+}
+
+uint32_t SymbolTable::find_by_name(std::string_view company_name) const {
+  const std::string n = normalize_company_name(company_name);
+  if (n.size() < 4) return kInvalid;
+  const uint32_t* v = by_name_.find(hash_sv(n));
+  if (!v || *v == kAmbiguous) return kInvalid;
+  return *v;
+}
+
 uint64_t SymbolTable::make_key(std::string_view sym) {
   char b[8] = {' ', ' ', ' ', ' ', ' ', ' ', ' ', ' '};
   for (std::size_t i = 0; i < sym.size() && i < 8; ++i) b[i] = to_upper(sym[i]);
@@ -349,6 +419,7 @@ void SymbolTable::load_dir(const std::string& dir, std::string* report) {
     note("sec_tickers", load_sec_tickers(*t));
   if (auto t = fileutil::read_file(fileutil::join(dir, "fundamentals.tsv"))) note("fundamentals", load_fundamentals(*t));
   if (auto t = fileutil::read_file(fileutil::join(dir, "finra_shvol.txt"))) note("finra_shvol", load_finra_short_volume(*t));
+  build_name_index();
 }
 
 }  // namespace stok

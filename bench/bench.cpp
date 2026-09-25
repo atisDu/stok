@@ -168,9 +168,9 @@ int main() {
 
   // ---------------- market path ----------------
   std::printf("\nmarket path (ITCH 5.0)\n");
-  std::vector<uint8_t> stream;
-  std::vector<uint32_t> offsets;
-  {
+  // Two synthetic streams: prices clustered near a per-symbol mid (like real
+  // order flow) and uniformly random prices (worst case for the ladders).
+  auto make_stream = [](bool clustered, std::vector<uint8_t>& stream, std::vector<uint32_t>& offsets) {
     std::mt19937_64 rng(7);
     uint8_t m[64];
     auto push = [&](std::size_t n) {
@@ -190,7 +190,16 @@ int main() {
       const uint64_t ts = 34'200'000'000'000ull + static_cast<uint64_t>(i) * 10'000;
       const int op = static_cast<int>(rng() % 10);
       if (op < 5 || live.size() < 1000) {
-        push(itch::enc::add(m, loc, ts, ref, 'B', 100 + rng() % 900, "Z0000", 10000 + rng() % 50000));
+        const char side = (rng() & 1) ? 'B' : 'S';
+        uint32_t px;
+        if (clustered) {
+          const uint32_t mid = 20000 + loc * 10;  // per-symbol mid
+          const uint32_t off = static_cast<uint32_t>(rng() % 8) * static_cast<uint32_t>(rng() % 8) * 10;  // near touch
+          px = side == 'B' ? mid - 10 - off : mid + 10 + off;
+        } else {
+          px = 10000 + static_cast<uint32_t>(rng() % 50000);
+        }
+        push(itch::enc::add(m, loc, ts, ref, side, 100 + rng() % 900, "Z0000", px));
         live.push_back(ref++);
       } else {
         const std::size_t pick = rng() % live.size();
@@ -201,19 +210,28 @@ int main() {
         live.pop_back();
       }
     }
-  }
+  };
   MarketBoard mboard(syms.size());
-  ItchBook book(syms, mboard, nullptr, nullptr, 1 << 22);
-  // Map synthetic locates to symbols (keys "Z0000".. exist in the padded table).
-  const uint64_t t0 = mono_ns();
-  for (std::size_t i = 0; i < offsets.size(); ++i) {
-    const std::size_t end = i + 1 < offsets.size() ? offsets[i + 1] : stream.size();
-    itch::decode(stream.data() + offsets[i], end - offsets[i], book);
+  for (int scenario = 0; scenario < 3; ++scenario) {
+    const bool clustered = scenario != 1;
+    const bool quotes = scenario != 2;
+    std::vector<uint8_t> stream;
+    std::vector<uint32_t> offsets;
+    make_stream(clustered, stream, offsets);
+    MarketBoard board(syms.size());
+    ItchBook book(syms, board, nullptr, nullptr, 1 << 22, quotes);
+    const uint64_t t0 = mono_ns();
+    for (std::size_t i = 0; i < offsets.size(); ++i) {
+      const std::size_t end = i + 1 < offsets.size() ? offsets[i + 1] : stream.size();
+      itch::decode(stream.data() + offsets[i], end - offsets[i], book);
+    }
+    const double itch_ns = static_cast<double>(mono_ns() - t0) / static_cast<double>(offsets.size());
+    std::snprintf(note, sizeof(note), "%.1fM msgs, %.1f M msg/s, %zu live orders", offsets.size() / 1e6,
+                  1e3 / itch_ns, book.live_orders());
+    const char* names[] = {"decode + orders + top of book (clustered px)", "decode + orders + top of book (random px)",
+                           "decode + orders, no quotes"};
+    row(names[scenario], itch_ns, note);
   }
-  const double itch_ns = static_cast<double>(mono_ns() - t0) / static_cast<double>(offsets.size());
-  std::snprintf(note, sizeof(note), "%.1fM msgs, %.1f M msg/s, %zu live orders", offsets.size() / 1e6, 1e3 / itch_ns,
-                book.live_orders());
-  row("decode + order book + board update", itch_ns, note);
   row("seqlock snapshot (hot fields)", time_per_op(1'000'000, [&] { keep(mboard.hot(syms.find("Z0001"))); }), "engine read of one symbol");
 
   // ---------------- inter-thread ----------------

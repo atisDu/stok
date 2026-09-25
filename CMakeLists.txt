@@ -63,7 +63,9 @@ add_library(stok_core STATIC
   src/market/runner.cpp
   src/market/sources.cpp
   src/engine/engine.cpp
+  src/engine/paper.cpp
   src/engine/scorer.cpp
+  src/research/report.cpp
   src/sink/alerts.cpp
   src/sink/journal.cpp
   src/app/settings.cpp
@@ -79,6 +81,9 @@ target_link_libraries(stok-ref PRIVATE stok_core)
 
 add_executable(stok-replay src/app/stok_replay.cpp)
 target_link_libraries(stok-replay PRIVATE stok_core)
+
+add_executable(stok-report src/app/stok_report.cpp)
+target_link_libraries(stok-report PRIVATE stok_core)
 
 add_executable(stok-bench bench/bench.cpp)
 target_link_libraries(stok-bench PRIVATE stok_core)

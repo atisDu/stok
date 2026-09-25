@@ -173,3 +173,30 @@ TEST(edgar_exhibit_discovery_and_event) {
   const auto wires = parse_all(FeedKind::Rss, test::fixture("globenewswire.xml"), syms);
   if (!wires.empty()) CHECK_EQ(ev.title_key, wires[0].title_key);
 }
+
+TEST(company_name_fallback_for_untagged_stories) {
+  const SymbolTable syms = test::fixture_symbols();
+  const std::string doc =
+      "<rss><channel>"
+      "<item><guid>a</guid><title>Acme Robotics Launches Next-Generation Warehouse Robot</title>"
+      "<description>NEW YORK, Sept. 25, 2026 (GLOBE NEWSWIRE) -- Acme Robotics, Inc. today announced a new robot."
+      "</description></item>"
+      "<item><guid>b</guid><title>Quarterly Update</title><dc:contributor>Delta Therapeutics, Inc.</dc:contributor>"
+      "<description>Update for shareholders.</description></item>"
+      "<item><guid>c</guid><title>Delta Therapeutics&#8217;s DLX-101 Data Presented at Congress</title>"
+      "<description>Data were presented.</description></item>"
+      "<item><guid>d</guid><title>Industry Group Publishes Robotics Outlook</title>"
+      "<description>A trade group published a report.</description></item>"
+      "</channel></rss>";
+  const auto evs = parse_all(FeedKind::Rss, doc, syms);
+  CHECK_EQ(evs.size(), 4u);
+  if (evs.size() < 4) return;
+  CHECK_EQ(ticker_of(syms, evs[0]), std::string("ACMR"));
+  CHECK(evs[0].flags & kEvNameMatched);
+  CHECK_EQ(ticker_of(syms, evs[1]), std::string("DLTX"));  // dc:contributor
+  CHECK_EQ(ticker_of(syms, evs[2]), std::string("DLTX"));  // headline subject with possessive
+  CHECK_EQ(evs[3].n_tickers, 0);                           // no false positive
+  // Tagged stories don't use (or get flagged by) the fallback.
+  const auto gnw = parse_all(FeedKind::Rss, test::fixture("globenewswire.xml"), syms);
+  if (!gnw.empty()) CHECK(!(gnw[0].flags & kEvNameMatched));
+}

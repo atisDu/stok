@@ -203,6 +203,27 @@ TEST(engine_halts_movers_outcomes_and_first_seen) {
   CHECK_EQ(outcomes, 1);
 }
 
+TEST(engine_wide_spread_blocks_alert) {
+  Rig r;
+  r.trade("ACMR", 2.00, 1000);
+  const auto gnw = events(FeedKind::Rss, "globenewswire.xml", r.syms, 0, r.now);
+  if (gnw.empty()) return;
+  r.engine->on_news(gnw[0], r.now);
+  const uint32_t acmr = r.syms.find("ACMR");
+  r.board.on_quote(acmr, 22000, 1000, 26000, 1000, r.since_midnight());  // 16.7% spread
+  r.trade("ACMR", 2.40, 200000);
+  r.engine->evaluate(r.now + 1);
+  CHECK(r.drain_alerts().empty());
+  r.board.on_quote(acmr, 23900, 5000, 24100, 3000, r.since_midnight());  // 0.8% spread
+  r.engine->evaluate(r.now + 2);
+  auto al = r.drain_alerts();
+  CHECK_EQ(al.size(), 1u);
+  if (!al.empty()) {
+    CHECK_NEAR(al[0].spread_pct, 200.0 * 200 / 48000.0, 1e-9);
+    CHECK_NEAR(al[0].ask, 2.41, 1e-9);
+  }
+}
+
 TEST(engine_cooldown_suppresses_repeat_signals) {
   EngineConfig cfg;
   cfg.watch_window_s = 1;
@@ -222,6 +243,46 @@ TEST(engine_cooldown_suppresses_repeat_signals) {
   CHECK_EQ(r.engine->signals_emitted(Tier::Watch), 1u);  // ...but not re-signaled
 }
 
+TEST(engine_paper_trade_from_signal) {
+  EngineConfig cfg;
+  cfg.paper.enabled = true;
+  cfg.paper.latency_ms = 0;
+  cfg.paper.slippage_bps = 0;
+  cfg.paper.flat_by_minute = 24 * 60;
+  Rig r(cfg);
+  r.trade("ACMR", 2.00, 1000);
+  const auto gnw = events(FeedKind::Rss, "globenewswire.xml", r.syms, 0, r.now);
+  if (gnw.empty()) return;
+  r.engine->on_news(gnw[0], r.now);
+  const uint32_t acmr = r.syms.find("ACMR");
+  r.board.on_quote(acmr, 23900, 5000, 24100, 3000, r.since_midnight());
+  r.trade("ACMR", 2.40, 200000);
+  r.engine->evaluate(r.now + 1);   // ALERT/HIGH -> paper order
+  r.engine->evaluate(r.now + 2);   // fill
+  r.board.on_quote(acmr, 29500, 5000, 29700, 3000, r.since_midnight());
+  r.engine->evaluate(r.now + 3);   // +22% at the bid -> target
+  r.engine->shutdown(r.now + 4);
+  int opens = 0, closes = 0;
+  double pnl = 0;
+  while (JournalRecord* rec = r.journal.front()) {
+    if (rec->type == JournalRecord::Type::Trade) {
+      if (rec->trade.closed) {
+        ++closes;
+        pnl = rec->trade.pnl_usd;
+        CHECK_EQ(std::string(rec->trade.exit_reason), std::string("target"));
+      } else {
+        ++opens;
+        CHECK_NEAR(rec->trade.entry_px, 2.41, 1e-9);
+      }
+    }
+    r.journal.pop();
+  }
+  CHECK_EQ(opens, 1);
+  CHECK_EQ(closes, 1);
+  CHECK(pnl > 200);
+  CHECK(r.engine->paper() != nullptr && r.engine->paper()->stats().wins == 1);
+}
+
 TEST(journal_lines_are_valid_json) {
   Rig r;
   r.trade("ACMR", 2.00, 1000);
@@ -238,6 +299,7 @@ TEST(journal_lines_are_valid_json) {
     if (rec->type == JournalRecord::Type::News) line = j.news_json(*rec);
     else if (rec->type == JournalRecord::Type::Signal) line = j.signal_json(rec->signal);
     else if (rec->type == JournalRecord::Type::Outcome) line = j.outcome_json(rec->outcome);
+    else if (rec->type == JournalRecord::Type::Trade) line = j.trade_json(rec->trade);
     JsonDoc doc;
     CHECK(doc.parse(line));
     if (rec->type == JournalRecord::Type::News) {

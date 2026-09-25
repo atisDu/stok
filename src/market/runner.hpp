@@ -24,6 +24,7 @@ struct MarketOptions {
   std::string bridge_bind = "127.0.0.1";
   uint16_t bridge_port = 7777;
   std::size_t order_capacity = 1u << 22;
+  bool track_quotes = true;      // maintain price ladders -> best bid/ask
   std::string baseline_dir;      // where history.tsv / baseline.tsv live
   bool write_baseline = true;    // append the session at end of day
   bool busy_poll = false;

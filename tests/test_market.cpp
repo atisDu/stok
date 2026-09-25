@@ -1,8 +1,15 @@
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <sys/socket.h>
+#include <unistd.h>
 #include <zlib.h>
 
 #include <atomic>
 #include <cstdio>
 #include <filesystem>
+#include <map>
+#include <random>
 #include <vector>
 
 #include "check.hpp"
@@ -11,6 +18,7 @@
 #include "market/baseline.hpp"
 #include "market/itch.hpp"
 #include "market/itch_book.hpp"
+#include "market/level_book.hpp"
 #include "market/sources.hpp"
 #include "util/file.hpp"
 #include "util/time.hpp"
@@ -224,4 +232,241 @@ TEST(expected_volume_curve_is_monotonic) {
   CHECK_NEAR(expected_volume_fraction(9 * 60 + 30), 0.04, 1e-9);
   CHECK_NEAR(expected_volume_fraction(16 * 60), 0.96, 1e-9);
   CHECK_NEAR(expected_volume_fraction(23 * 60), 1.0, 1e-9);
+}
+
+TEST(level_ladder_matches_reference_map) {
+  std::mt19937_64 rng(3);
+  for (int side = 0; side < 2; ++side) {
+    const bool is_bid = side == 0;
+    SideLadder lad(is_bid);
+    std::map<uint32_t, uint64_t> ref;
+    for (int i = 0; i < 200000; ++i) {
+      const uint32_t px = 10000 + static_cast<uint32_t>(rng() % 300) * 10;
+      const uint64_t q = 1 + rng() % 500;
+      if (rng() % 3 != 0) {
+        lad.add(px, q);
+        ref[px] += q;
+      } else {
+        auto it = ref.find(px);
+        lad.remove(px, q);
+        if (it != ref.end()) {
+          if (q >= it->second) ref.erase(it);
+          else it->second -= q;
+        }
+      }
+      if ((i & 1023) == 0) {
+        CHECK_EQ(lad.depth(), ref.size());
+        if (!ref.empty()) {
+          const auto best = is_bid ? *ref.rbegin() : *ref.begin();
+          CHECK_EQ(lad.best_price(), best.first);
+          CHECK_EQ(lad.best_qty(), best.second);
+        }
+      }
+    }
+  }
+}
+
+TEST(itch_book_top_of_book) {
+  const SymbolTable syms = test::fixture_symbols();
+  MarketBoard board(syms.size());
+  board.set_session_date(2026, 9, 25);
+  ItchBook book(syms, board, nullptr, nullptr, 1024);
+  std::vector<uint8_t> m(64);
+  auto run = [&](std::size_t n) { itch::decode(m.data(), n, book); };
+  const uint32_t acmr = syms.find("ACMR");
+  run(enc::stock_directory(m.data(), 1, at(3, 0), "ACMR"));
+  run(enc::add(m.data(), 1, at(8, 0), 1, 'B', 500, "ACMR", 19900));
+  run(enc::add(m.data(), 1, at(8, 0), 2, 'B', 300, "ACMR", 20000));
+  run(enc::add(m.data(), 1, at(8, 0), 3, 'B', 200, "ACMR", 20000));
+  run(enc::add(m.data(), 1, at(8, 0), 4, 'S', 400, "ACMR", 20200));
+  run(enc::add(m.data(), 1, at(8, 0), 5, 'S', 100, "ACMR", 20500));
+  MarketHot h = board.hot(acmr);
+  CHECK_EQ(h.bid_px, 20000);
+  CHECK_EQ(h.bid_sz, 500u);  // two orders at 2.00
+  CHECK_EQ(h.ask_px, 20200);
+  CHECK_EQ(h.ask_sz, 400u);
+  CHECK(h.quote_valid());
+  CHECK_NEAR(h.spread_pct(), 200.0 * 200 / 40200.0, 1e-9);
+  run(enc::executed(m.data(), 1, at(8, 1), 4, 400, 1));  // ask level 2.02 swept
+  h = board.hot(acmr);
+  CHECK_EQ(h.ask_px, 20500);
+  CHECK_EQ(h.ask_sz, 100u);
+  run(enc::cancel(m.data(), 1, at(8, 2), 2, 100));       // 2.00 bid: 400 left
+  run(enc::del(m.data(), 1, at(8, 2), 3));               // 2.00 bid: 200 left
+  h = board.hot(acmr);
+  CHECK_EQ(h.bid_px, 20000);
+  CHECK_EQ(h.bid_sz, 200u);
+  run(enc::replace(m.data(), 1, at(8, 3), 2, 6, 700, 20100));  // bid moves up to 2.01
+  h = board.hot(acmr);
+  CHECK_EQ(h.bid_px, 20100);
+  CHECK_EQ(h.bid_sz, 700u);
+  run(enc::executed_price(m.data(), 1, at(8, 4), 6, 700, true, 20100));
+  h = board.hot(acmr);
+  CHECK_EQ(h.bid_px, 19900);  // back to the 1.99 level
+  CHECK_EQ(h.bid_sz, 500u);
+  CHECK(book.book(acmr) != nullptr);
+  CHECK_EQ(book.book(acmr)->bids.depth(), 1u);
+}
+
+TEST(bridge_quote_lines) {
+  const SymbolTable syms = test::fixture_symbols();
+  MarketBoard board(syms.size());
+  board.set_session_date(2026, 9, 25);
+  BridgeReceiver b;
+  b.handle("Q ACMR 2.40 1200 2.45 800\nQ ACMR 2.40 1200\n", syms, board, nullptr, nullptr);
+  const MarketHot h = board.hot(syms.find("ACMR"));
+  CHECK_EQ(h.bid_px, 24000);
+  CHECK_EQ(h.ask_px, 24500);
+  CHECK_EQ(h.bid_sz, 1200u);
+  CHECK_EQ(h.ask_sz, 800u);
+  CHECK_EQ(b.stats().quotes, 1u);
+  CHECK_EQ(b.stats().bad, 1u);
+}
+
+namespace {
+
+std::vector<std::vector<uint8_t>> mold_packets(const std::vector<std::vector<uint8_t>>& msgs,
+                                               const std::vector<std::pair<std::size_t, std::size_t>>& spans) {
+  std::vector<std::vector<uint8_t>> out;
+  for (auto [first, count] : spans) {
+    std::vector<uint8_t> p(20);
+    std::memcpy(p.data(), "SESSION001", 10);
+    enc::put64(p.data() + 10, first + 1);  // MoldUDP64 sequence numbers start at 1
+    enc::put16(p.data() + 18, static_cast<uint16_t>(count));
+    for (std::size_t i = first; i < first + count; ++i) {
+      uint8_t len[2];
+      enc::put16(len, static_cast<uint16_t>(msgs[i].size()));
+      p.insert(p.end(), len, len + 2);
+      p.insert(p.end(), msgs[i].begin(), msgs[i].end());
+    }
+    out.push_back(std::move(p));
+  }
+  return out;
+}
+
+}  // namespace
+
+TEST(moldudp64_gap_recovery_replays_in_order) {
+  const SymbolTable syms = test::fixture_symbols();
+  const auto msgs = session().msgs;  // 18 messages
+  // Reference: everything in order.
+  MarketBoard ref_board(syms.size());
+  ref_board.set_session_date(2026, 9, 25);
+  ItchBook ref_book(syms, ref_board, nullptr, nullptr, 64);
+  for (const auto& m : msgs) itch::decode(m.data(), m.size(), ref_book);
+
+  const auto pk = mold_packets(msgs, {{0, 4}, {4, 3}, {7, 4}, {11, 4}, {15, 3}});
+  MarketBoard board(syms.size());
+  board.set_session_date(2026, 9, 25);
+  ItchBook book(syms, board, nullptr, nullptr, 64);
+  MoldUdp64Receiver rx;
+  std::vector<std::pair<uint64_t, uint16_t>> requests;
+  rx.enable_recovery([&](const char*, uint64_t seq, uint16_t count) { requests.emplace_back(seq, count); }, 250, 50);
+  uint64_t now = 1'000'000'000;
+  rx.on_packet(pk[0].data(), pk[0].size(), book, now);  // seq 1-4
+  rx.on_packet(pk[2].data(), pk[2].size(), book, now);  // seq 8-11: gap 5-7 -> request
+  rx.on_packet(pk[4].data(), pk[4].size(), book, now);  // seq 16-18: buffered
+  CHECK(rx.recovering());
+  CHECK_EQ(requests.size(), 1u);
+  if (!requests.empty()) {
+    CHECK_EQ(requests[0].first, 5u);
+    CHECK_EQ(requests[0].second, 3);
+  }
+  CHECK_EQ(rx.stats().messages, 4u);  // nothing past the gap applied yet
+  rx.on_packet(pk[1].data(), pk[1].size(), book, now + 1'000'000);  // retransmission of 5-7
+  CHECK(rx.recovering());             // 12-15 still missing -> next request
+  CHECK_EQ(requests.size(), 2u);
+  if (requests.size() == 2) {
+    CHECK_EQ(requests[1].first, 12u);
+    CHECK_EQ(requests[1].second, 4);
+  }
+  rx.on_packet(pk[3].data(), pk[3].size(), book, now + 2'000'000);  // 12-15
+  CHECK(!rx.recovering());
+  CHECK_EQ(rx.expected_seq(), 19u);
+  CHECK_EQ(rx.stats().messages, 18u);
+  CHECK_EQ(rx.stats().recovered, 1u);
+  const uint32_t acmr = syms.find("ACMR");
+  CHECK_EQ(board.hot(acmr).day_volume, ref_board.hot(acmr).day_volume);
+  CHECK_EQ(board.hot(acmr).last_px, ref_board.hot(acmr).last_px);
+  CHECK_NEAR(board.hot(acmr).vwap(), ref_board.hot(acmr).vwap(), 1e-12);
+  CHECK_EQ(book.stats().unknown_ref, 0u);
+}
+
+TEST(moldudp64_gap_timeout_gives_up) {
+  const SymbolTable syms = test::fixture_symbols();
+  const auto msgs = session().msgs;
+  const auto pk = mold_packets(msgs, {{0, 4}, {4, 3}, {7, 4}});
+  MarketBoard board(syms.size());
+  ItchBook book(syms, board, nullptr, nullptr, 64);
+  MoldUdp64Receiver rx;
+  int requests = 0;
+  rx.enable_recovery([&](const char*, uint64_t, uint16_t) { ++requests; }, 100, 20);
+  const uint64_t t = 5'000'000'000;
+  rx.on_packet(pk[0].data(), pk[0].size(), book, t);
+  rx.on_packet(pk[2].data(), pk[2].size(), book, t);
+  rx.tick(book, t + 30'000'000);   // retry
+  rx.tick(book, t + 60'000'000);   // retry
+  CHECK(requests >= 2);
+  rx.tick(book, t + 150'000'000);  // timeout: skip 5-7, apply 8-11
+  CHECK(!rx.recovering());
+  CHECK_EQ(rx.stats().gap_timeouts, 1u);
+  CHECK_EQ(rx.stats().gap_messages, 3u);
+  CHECK_EQ(rx.stats().messages, 8u);
+  CHECK_EQ(rx.expected_seq(), 12u);
+}
+
+TEST(moldudp64_socket_rerequest_roundtrip) {
+  // Fake "re-request server" on loopback.
+  const int srv = ::socket(AF_INET, SOCK_DGRAM, 0);
+  sockaddr_in sa{};
+  sa.sin_family = AF_INET;
+  sa.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  sa.sin_port = 0;
+  CHECK(::bind(srv, reinterpret_cast<sockaddr*>(&sa), sizeof(sa)) == 0);
+  socklen_t sl = sizeof(sa);
+  getsockname(srv, reinterpret_cast<sockaddr*>(&sa), &sl);
+  const uint16_t srv_port = ntohs(sa.sin_port);
+
+  MoldUdp64Receiver rx;
+  MoldUdp64Receiver::Options o;
+  o.port = 0;                  // ephemeral, unicast (no multicast group)
+  o.busy_poll = false;
+  o.rerequest = "127.0.0.1:" + std::to_string(srv_port);
+  std::string err;
+  CHECK(rx.open(o, &err));
+  sockaddr_in rx_addr{};
+  rx_addr.sin_family = AF_INET;
+  rx_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  rx_addr.sin_port = htons(rx.local_port());
+
+  const SymbolTable syms = test::fixture_symbols();
+  MarketBoard board(syms.size());
+  board.set_session_date(2026, 9, 25);
+  ItchBook book(syms, board, nullptr, nullptr, 64);
+  const auto msgs = session().msgs;
+  const auto pk = mold_packets(msgs, {{0, 6}, {6, 6}, {12, 6}});
+  auto send = [&](const std::vector<uint8_t>& p) {
+    ::sendto(srv, p.data(), p.size(), 0, reinterpret_cast<const sockaddr*>(&rx_addr), sizeof(rx_addr));
+  };
+  send(pk[0]);
+  send(pk[2]);  // packet 2 "lost"
+  for (int i = 0; i < 20 && rx.stats().packets < 2; ++i) rx.poll(book, 20);
+  CHECK(rx.recovering());
+  // Server receives the request and answers with the missing packet.
+  uint8_t req[64];
+  sockaddr_in from{};
+  socklen_t fl = sizeof(from);
+  pollfd pf{srv, POLLIN, 0};
+  CHECK(::poll(&pf, 1, 1000) == 1);
+  const ssize_t rn = ::recvfrom(srv, req, sizeof(req), 0, reinterpret_cast<sockaddr*>(&from), &fl);
+  CHECK_EQ(rn, 20);
+  CHECK(std::memcmp(req, "SESSION001", 10) == 0);
+  CHECK_EQ(itch::be64(req + 10), 7u);
+  CHECK_EQ(itch::be16(req + 18), 6);
+  ::sendto(srv, pk[1].data(), pk[1].size(), 0, reinterpret_cast<const sockaddr*>(&from), fl);
+  for (int i = 0; i < 20 && rx.recovering(); ++i) rx.poll(book, 20);
+  CHECK(!rx.recovering());
+  CHECK_EQ(rx.stats().messages, 18u);
+  CHECK_EQ(board.hot(syms.find("ACMR")).day_volume, 6900u);
+  ::close(srv);
 }

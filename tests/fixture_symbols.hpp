@@ -24,6 +24,7 @@ inline SymbolTable fixture_symbols() {
       "BRVO\t2.50\t800000\t20\t2026-09-24\n"
       "DLTX\t4.00\t300000\t20\t2026-09-24\n"
       "CHLY\t45.00\t2000000\t20\t2026-09-24\n");
+  t.build_name_index();
   return t;
 }
 

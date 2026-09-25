@@ -133,6 +133,7 @@ std::string Journal::news_json(const JournalRecord& r) const {
     j.s.push_back('"');
   }
   j.s.push_back(']');
+  if (e.flags & kEvNameMatched) j.boolean("name_matched", true);
   if (e.n_unresolved) {
     j.key("unresolved");
     j.s.push_back('[');
@@ -208,6 +209,11 @@ std::string Journal::signal_json(const Signal& s) const {
   j.num("rvol", s.rvol, 2);
   j.num("dollar_volume", s.dollar_volume, 0);
   j.num("vwap", s.vwap);
+  if (s.spread_pct > 0) {
+    j.num("bid", s.bid);
+    j.num("ask", s.ask);
+    j.num("spread_pct", s.spread_pct, 2);
+  }
   if (s.market_cap > 0) j.num("mcap", s.market_cap, 0);
   if (s.shares_out > 0) j.num("shares_out", s.shares_out, 0);
   if (s.amount_usd > 0) j.num("amount_usd", s.amount_usd, 0);
@@ -246,6 +252,38 @@ std::string Journal::outcome_json(const Outcome& o) const {
   return j.done();
 }
 
+std::string Journal::trade_json(const PaperTrade& t) const {
+  J j;
+  j.time("t", static_cast<int64_t>(t.closed ? t.exit_ns : t.entry_ns));
+  j.str("event", t.closed ? "close" : "open");
+  j.str("ticker", t.ticker);
+  j.str("tier", tier_name(t.tier));
+  j.str("catalyst", catalyst_name(t.catalyst));
+  j.integer("score", t.score);
+  j.hex("news_id", t.news_id);
+  j.uinteger("signal_ns", t.signal_ns);
+  j.uinteger("entry_ns", t.entry_ns);
+  j.num("signal_px", t.signal_px);
+  j.num("entry_px", t.entry_px);
+  j.num("shares", t.shares, 0);
+  j.boolean("quote_entry", t.quote_entry);
+  if (t.size_over_touch) j.boolean("size_over_touch", true);
+  j.num("entry_delay_ms", t.entry_ns > t.signal_ns ? static_cast<double>(t.entry_ns - t.signal_ns) / 1e6 : 0.0, 1);
+  if (t.closed) {
+    j.uinteger("exit_ns", t.exit_ns);
+    j.num("exit_px", t.exit_px);
+    j.boolean("quote_exit", t.quote_exit);
+    j.str("exit_reason", t.exit_reason);
+    j.num("hold_s", static_cast<double>(t.exit_ns - t.entry_ns) / 1e9, 1);
+    j.num("fees", t.fees, 2);
+    j.num("pnl_usd", t.pnl_usd, 2);
+    j.num("pnl_pct", t.pnl_pct, 3);
+    j.num("mfe_pct", t.mfe_pct, 2);
+    j.num("mae_pct", t.mae_pct, 2);
+  }
+  return j.done();
+}
+
 void Journal::write(const JournalRecord& r) {
   switch (r.type) {
     case JournalRecord::Type::News: {
@@ -267,6 +305,14 @@ void Journal::write(const JournalRecord& r) {
     case JournalRecord::Type::Outcome: {
       if (FILE* f = file_for("outcomes", r.outcome.t_ns)) {
         const std::string line = outcome_json(r.outcome);
+        std::fwrite(line.data(), 1, line.size(), f);
+        std::fputc('\n', f);
+      }
+      break;
+    }
+    case JournalRecord::Type::Trade: {
+      if (FILE* f = file_for("trades", r.trade.closed ? r.trade.exit_ns : r.trade.entry_ns)) {
+        const std::string line = trade_json(r.trade);
         std::fwrite(line.data(), 1, line.size(), f);
         std::fputc('\n', f);
       }

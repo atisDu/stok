@@ -35,7 +35,7 @@ bool MarketRunner::init(std::string* err) {
     return false;
   }
   board_.set_session_date(y, m, d);
-  book_ = std::make_unique<ItchBook>(symbols_, board_, &events_, waker_, opts_.order_capacity);
+  book_ = std::make_unique<ItchBook>(symbols_, board_, &events_, waker_, opts_.order_capacity, opts_.track_quotes);
 
   if (opts_.source == "itch_file") {
     file_ = std::make_unique<ItchFileReader>();
@@ -128,9 +128,12 @@ std::string MarketRunner::stats_report() const {
   std::string out = buf;
   if (mold_) {
     const auto& m = mold_->stats();
-    std::snprintf(buf, sizeof(buf), " | mold packets=%llu msgs=%llu gaps=%llu gap_msgs=%llu dups=%llu bad=%llu",
+    std::snprintf(buf, sizeof(buf),
+                  " | mold packets=%llu msgs=%llu gaps=%llu recovered=%llu lost_msgs=%llu requests=%llu timeouts=%llu "
+                  "dups=%llu bad=%llu",
                   (unsigned long long)m.packets, (unsigned long long)m.messages, (unsigned long long)m.gaps,
-                  (unsigned long long)m.gap_messages, (unsigned long long)m.dups, (unsigned long long)m.bad);
+                  (unsigned long long)m.recovered, (unsigned long long)m.gap_messages, (unsigned long long)m.requests,
+                  (unsigned long long)m.gap_timeouts, (unsigned long long)m.dups, (unsigned long long)m.bad);
     out += buf;
   }
   if (bridge_) {

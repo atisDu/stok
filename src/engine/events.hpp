@@ -34,6 +34,7 @@ struct HaltInfo {
 };
 
 inline constexpr int kMaxTickers = 6;
+inline constexpr uint8_t kEvNameMatched = 1;  // ticker found by company name, not an exchange tag
 inline constexpr int kMaxUnresolved = 3;
 
 // One item from any source. Fixed size and trivially copyable, so it moves
@@ -51,7 +52,8 @@ struct NewsEvent {
   EventKind kind;
   uint8_t n_tickers;
   uint8_t n_unresolved;
-  uint8_t pad_[3];
+  uint8_t flags;        // kEvNameMatched ...
+  uint8_t pad_[2];
   uint32_t tickers[kMaxTickers];         // symbol ids
   char unresolved[kMaxUnresolved][16];   // e.g. "OTC:ABCDF", "TSXV:XYZ"
   char form[16];                         // EDGAR form type
@@ -67,6 +69,7 @@ struct NewsEvent {
     source = 0;
     kind = EventKind::News;
     n_tickers = n_unresolved = 0;
+    flags = 0;
     form[0] = '\0';
     halt = HaltInfo{};
     title.clear();

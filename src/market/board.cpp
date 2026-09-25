@@ -91,6 +91,17 @@ void MarketBoard::on_trading_action(uint32_t sym, char state, const char* reason
   states_[sym].end_write();
 }
 
+void MarketBoard::on_quote(uint32_t sym, int32_t bid, uint64_t bid_sz, int32_t ask, uint64_t ask_sz, uint64_t ns) {
+  if (sym >= states_.size()) return;
+  MarketState& s = states_[sym].begin_write();
+  s.hot.bid_px = bid;
+  s.hot.ask_px = ask;
+  s.hot.bid_sz = static_cast<uint32_t>(bid_sz > UINT32_MAX ? UINT32_MAX : bid_sz);
+  s.hot.ask_sz = static_cast<uint32_t>(ask_sz > UINT32_MAX ? UINT32_MAX : ask_sz);
+  s.hot.quote_ns = midnight_ns_ + static_cast<int64_t>(ns);
+  states_[sym].end_write();
+}
+
 void MarketBoard::on_reg_sho(uint32_t sym, char action) {
   if (sym >= states_.size()) return;
   MarketState& s = states_[sym].begin_write();

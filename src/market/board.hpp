@@ -32,8 +32,21 @@ struct MarketHot {
   char halt_reason[5] = {};
   bool reg_sho_restricted = false;
   uint8_t pad1 = 0;
+  // Top of book (venue book of the feed, e.g. Nasdaq's for ITCH).
+  int32_t bid_px = 0;
+  int32_t ask_px = 0;
+  uint32_t bid_sz = 0;
+  uint32_t ask_sz = 0;
+  int64_t quote_ns = 0;      // epoch ns of the last top-of-book change
 
   double last() const { return last_px / 1e4; }
+  double bid() const { return bid_px / 1e4; }
+  double ask() const { return ask_px / 1e4; }
+  // A usable two-sided, uncrossed quote.
+  bool quote_valid() const { return bid_px > 0 && ask_px > 0 && ask_px > bid_px; }
+  double spread_pct() const {
+    return quote_valid() ? (ask_px - bid_px) * 200.0 / (ask_px + bid_px) : 0.0;
+  }
   double vwap() const { return day_volume ? static_cast<double>(notional_e4) / 1e4 / static_cast<double>(day_volume) : 0.0; }
   bool halted() const { return trading_state == 'H' || trading_state == 'P' || trading_state == 'Q'; }
 };
@@ -77,6 +90,7 @@ class MarketBoard {
   void on_cross(uint32_t sym, int32_t px, uint64_t shares, uint64_t ns_since_midnight, char cross_type);
   void on_trading_action(uint32_t sym, char state, const char* reason4);
   void on_reg_sho(uint32_t sym, char action);
+  void on_quote(uint32_t sym, int32_t bid, uint64_t bid_sz, int32_t ask, uint64_t ask_sz, uint64_t ns_since_midnight);
   const MarketState& writer_view(uint32_t sym) const { return states_[sym].writer_view(); }
 
   // ---- readers ----

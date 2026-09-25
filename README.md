@@ -25,12 +25,13 @@ exists.
 | Stage | How |
 |---|---|
 | **Collect** | Polls EDGAR, press-release wires and the Nasdaq halts feed. Each feed has several warm keep-alive TLS connections firing in staggered phases, with conditional GETs (304s) and per-host rate limits. For each 8-K/6-K it auto-fetches the EX-99 press-release exhibit from EDGAR. |
-| **Parse** | Zero-copy XML scanning. Each item's id is hashed first, so only new items get parsed. Exchange-tagged tickers are extracted (`(NASDAQ: ABCD)`, `OTCQB:`, `NYSE American:`...) and resolved against the official security master. |
+| **Parse** | Zero-copy XML scanning. Each item's id is hashed first, so only new items get parsed. Exchange-tagged tickers are extracted (`(NASDAQ: ABCD)`, `OTCQB:`, `NYSE American:`...) and resolved against the official security master. Stories with no tag fall back to matching the company name (contributor field, lead sentence, headline subject). |
 | **Score** | An Aho-Corasick DFA runs over about 320 tunable rules (`config/rules.tsv`) in one pass. It picks the catalyst, and checks for definitive vs. non-binding language, named top-tier counterparties, hedging and promotional language. Offerings, law-firm spam and distress are separated out. The dollar amount found is compared with market cap (materiality). |
 | **Filter** | Universe checks: exchange-listed, price band, market cap, no ETFs, warrants or units. Dilution and distress flags come from SEC filings: recent 424B or EFFECT, an S-3 shelf, S-1, item 3.02, reverse-split proxies, late filers, and Nasdaq deficiency status. |
-| **Confirm** | Price and volume from exchange data: move since the news, dollar volume since the news, RVOL against a self-built baseline, VWAP, and halts. |
+| **Confirm** | Price and volume from exchange data: move since the news, dollar volume since the news, RVOL against a self-built baseline, VWAP, halts, and the bid/ask spread from price ladders built out of ITCH order messages. |
 | **Signal** | `WATCH` (material news) → `ALERT` (the stock is moving on volume) → `HIGH` (strong score, small share count, clean filings, above VWAP). Also `HALT`, `MOVER` (big mover with no qualifying news) and `INFO` (an offering filed on a watched ticker). |
-| **Measure** | JSONL journal of every item, with per-source arrival times, cross-source "who had it first" stats, and price/volume at +1/5/15/30/60 minutes after every watched story. |
+| **Paper trade** | Optional local simulator: buys at the ask after a set latency, sells at the bid, with slippage and fees. Exits on stop, target, trailing stop, time limit or flat-by time. It can't exit during halts. Risk limits cap position size, open positions and daily loss. |
+| **Measure** | JSONL journal of every item, with per-source arrival times, cross-source "who had it first" stats, price/volume at +1/5/15/30/60 minutes after every watched story, and every paper trade. `stok-report` turns it into per-source, per-tier and per-catalyst results, plus a go/no-go verdict. |
 
 ## Official data sources
 
@@ -61,8 +62,8 @@ Expect better on a tuned bare-metal box.
 | Score a 3 KB story (320 rules, one pass) | ~11 µs (~290 MB/s) |
 | Engine: story → signal + journal record | ~1.5 µs |
 | Scan an unchanged 100-item feed (ids only) | ~50 µs (and usually a 304 means no scan at all) |
-| ITCH decode + order book + board update | ~60 ns/msg (16M msg/s; Nasdaq peaks around 2M/s) |
-| Seqlock snapshot of a symbol | ~11 ns |
+| ITCH decode + order book + top of book + board update | ~130–160 ns/msg (6–8M msg/s; ~65 ns without quotes; Nasdaq peaks around 2M/s) |
+| Seqlock snapshot of a symbol | ~20 ns |
 | Response received → WATCH emitted (daemon, incl. thread hop) | ~0.2 ms, or sub-µs hops with `busy_poll` on pinned cores |
 
 The network round trip to the source (5–80 ms) and the source's own publishing
@@ -107,7 +108,11 @@ Nasdaq, the SEC and the wires' CDNs are all nearby.
 * `none`: news-only. You get WATCH signals, halts from RSS, and outcome logging without prices.
 * `moldudp64`: live Nasdaq TotalView-ITCH (group/port/interface in the config).
 * `itch_file`: replay a Nasdaq ITCH file (`scripts/fetch_itch_sample.sh`) at any speed.
-* `bridge`: UDP text lines `T SYM PRICE SIZE [EPOCH_NS]` and `H SYM STATE [REASON]` from any other source.
+* `bridge`: UDP text lines `T SYM PRICE SIZE [EPOCH_NS]`, `Q SYM BID BIDSZ ASK ASKSZ` and `H SYM STATE [REASON]` from any other source.
+
+For live ITCH, set `mold_rerequest` to Nasdaq's re-request server. Missed packets
+are then re-requested and replayed in order, so the order book stays exact.
+Start the daemon before 04:00 ET so the book is built from the first message.
 
 Build the RVOL baseline from history with
 `./build/stok-replay data/itch/<file>.gz --baseline -c config/stok.conf`. The
@@ -120,12 +125,14 @@ daemon also appends each live session to it at the end of the day.
 | `stokd` | The daemon (`--probe` checks the feeds and exits) |
 | `stok-ref` | Official reference-data downloader (Nasdaq Trader, SEC, FINRA) |
 | `stok-replay` | ITCH replay: throughput benchmark, most-active report, baseline builder |
+| `stok-report` | Journal analysis: which sources are first, outcomes by tier/catalyst/score, paper-trading stats, go/no-go verdict |
 | `stok-bench` | Microbenchmarks for every hot-path stage |
 | `stok-tests` | Unit tests (`stok-tests <filter>` runs a subset) |
 
 ## Journal
 
-`data/journal/YYYY-MM-DD/{news,signals,outcomes}.jsonl`. DuckDB reads it directly:
+`data/journal/YYYY-MM-DD/{news,signals,outcomes,trades}.jsonl`. Summarize it with
+`./build/stok-report -c config/stok.conf`, or query it with DuckDB:
 
 ```sql
 SELECT n.catalyst, count(*) AS stories, avg(o.move_pct) AS avg_5m, avg(o.max_move_pct) AS avg_mfe
@@ -141,8 +148,9 @@ src/core     lock-free SPSC/MPSC rings, seqlock, flat hash map, eventfd waker, a
 src/net      non-blocking HTTP/1.1 + TLS connection state machine, parser, inflater, DNS cache, client
 src/feeds    zero-copy RSS/Atom scanning, EDGAR/halts parsers, ticker extraction, feed poller
 src/ref      security master (Nasdaq Trader + SEC), filings history / dilution flags
-src/market   ITCH 5.0 decoder, order book, seqlocked MarketBoard, MoldUDP64/file/bridge sources, baseline
-src/engine   rule scorer (Aho-Corasick), signal engine
+src/market   ITCH 5.0 decoder, order book + price ladders, seqlocked MarketBoard, MoldUDP64 (gap recovery)/file/bridge sources, baseline
+src/engine   rule scorer (Aho-Corasick), signal engine, paper trader
+src/research journal loader and report (stok-report)
 src/sink     JSONL journal, alerts (stdout / Telegram / UDP)
 src/app      stokd, stok-ref, stok-replay, settings
 config/      stok.conf, rules.tsv

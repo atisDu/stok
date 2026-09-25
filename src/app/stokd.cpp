@@ -271,8 +271,8 @@ int main(int argc, char** argv) {
   t_alerts.join();
   t_journal.join();
 
-  LOG_INFO("final feed stats:\n%s", poller.stats_report(false).c_str());
-  LOG_INFO("final engine stats:\n%s", engine.stats_report(false).c_str());
+  Logger::instance().log_lines(LogLevel::Info, "final feed stats:", poller.stats_report(false));
+  Logger::instance().log_lines(LogLevel::Info, "final engine stats:", engine.stats_report(false));
   if (have_market) LOG_INFO("%s", market.stats_report().c_str());
   // Persist filings learned today so tomorrow's dilution flags include them.
   if (fileutil::make_dirs(s.ref_dir) && fileutil::write_file_atomic(filings_path, filings.to_tsv()))

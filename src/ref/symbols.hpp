@@ -84,6 +84,14 @@ class SymbolTable {
   SymbolInfo& mut(uint32_t id) { return syms_[id]; }
   std::size_t size() const { return syms_.size(); }
 
+  // Issuer-name index for stories without an exchange tag. Built from SEC
+  // company names and Nasdaq security names, exchange-listed primary
+  // securities only; names shared by two issuers are marked ambiguous.
+  void build_name_index();
+  uint32_t find_by_name(std::string_view company_name) const;
+  // "Acme Robotics, Inc." -> "ACME ROBOTICS" (suffixes like Inc/Corp/Ltd dropped).
+  static std::string normalize_company_name(std::string_view name);
+
   // 8 bytes, left-justified, space padded: the ITCH "Stock" field.
   static uint64_t make_key(std::string_view sym);
   // Uppercase; class/series separators ('-', '/', ' ', '.') unified to '.'.
@@ -97,6 +105,8 @@ class SymbolTable {
   FlatMap64<uint32_t> by_norm_{1024};  // hash(normalized) -> id
   FlatMap64<uint32_t> by_key_{1024};   // ITCH key -> id
   std::unordered_map<uint32_t, std::vector<uint32_t>> by_cik_;
+  FlatMap64<uint32_t> by_name_{1024};  // hash(normalized name) -> id (kAmbiguous if shared)
+  static constexpr uint32_t kAmbiguous = UINT32_MAX - 1;
 };
 
 }  // namespace stok

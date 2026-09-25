@@ -108,10 +108,42 @@ Don't guess, measure:
   of consolidated volume. RVOL is computed against a baseline built from the
   same feed (`stok-replay --baseline`, plus the daemon's end-of-day append), so
   it compares like with like. Absolute dollar-volume thresholds are relative to that coverage.
-* **MoldUDP64**: `recvmmsg` batches, optional `SO_BUSY_POLL`, sequence tracking
-  with gap and duplicate counting. Retransmission requests are not implemented;
-  gaps are logged.
+* **Top of book.** Resting orders are aggregated into per-symbol price ladders
+  (sorted vectors with the best price at the back, so updates at the touch move
+  almost nothing). The best bid/ask goes to the board only when it changes.
+  That's the Nasdaq book, not the consolidated NBBO. It's complete only if the
+  feed is read from the start of the session: joined mid-day, orders entered
+  earlier are unknown. A Glimpse snapshot isn't implemented, and crossed or
+  one-sided quotes are treated as unknown.
+* **MoldUDP64**: `recvmmsg` batches, optional `SO_BUSY_POLL`, sequence tracking.
+  With `mold_rerequest` set, a gap triggers a re-request for the missing range
+  (retried every 50 ms). Newer packets are buffered and everything is replayed
+  strictly in sequence, so the order book never sees messages out of order.
+  After `mold_gap_timeout_ms` the receiver gives up, counts the lost messages and
+  continues from the buffer.
 * **Bridge**: any other source can feed trades and states over a UDP text protocol.
+
+## Paper trading and evaluation
+
+The paper trader runs inside the engine thread and reads the same seqlocked
+quotes, so it adds no queues or locks.
+* **Entry:** on ALERT/HIGH, the order "arrives" after `latency_ms` and buys at the
+  ask (or the last trade if there's no quote) plus `slippage_bps`. It cancels if
+  the price ran more than `max_chase_pct` past the signal price, or if the stock
+  stays halted beyond `entry_timeout_s`.
+* **Exit:** sells at the bid minus slippage on stop, target, trailing stop, time
+  limit or flat-by time. It can't sell while the stock is halted, so a gap
+  through the stop is booked at the reopening price, as it would be for real.
+* **What it doesn't model:** it assumes our size fills at the touch. Trades where
+  the order was larger than the displayed ask size are flagged (`size_over_touch`)
+  so they can be judged separately. Queue position and hidden liquidity aren't simulated.
+
+`stok-report` reads the journal and reports:
+* per source: how often it was first and how far behind otherwise;
+* the funnel from stories to signals;
+* price outcomes by tier, catalyst and score bucket;
+* paper-trading expectancy, profit factor, drawdown, and the result without the best three trades;
+* a PASS/FAIL checklist against the go/no-go criteria in PLAN.md section 5.
 
 ## OS tuning for production
 
@@ -128,9 +160,11 @@ Don't guess, measure:
 
 * Feed URLs couldn't be verified from the build environment, which blocks
   outbound access to those hosts. Run `stokd --probe` on your server first.
-* The ITCH order book tracks orders for pricing executions only. There's no
-  full depth or BBO, so no spread filter yet.
-* Company-name matching for stories that carry no exchange tag isn't implemented.
-  Those stories are journaled but not signaled.
+* Top of book is Nasdaq's own book (via ITCH), and it's complete only from the
+  session start (no Glimpse snapshot recovery).
+* Company-name matching only runs when a story has no exchange tag. It only
+  matches listed issuers, skips ambiguous names, and flags matches (`name_matched`)
+  so they can be judged separately.
+* Paper fills assume the displayed size at the touch is available (see above).
 * The rule weights are starting guesses. Tune them against the journal
   (`news.jsonl` joined to `outcomes.jsonl`) before trusting any tier.

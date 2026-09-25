@@ -75,6 +75,97 @@ int64_t item_date(std::string_view item) {
   return 0;
 }
 
+// Words that end a headline's subject: "Acme Robotics | Signs ...".
+bool is_subject_stop(std::string_view w) {
+  static const char* kStops[] = {
+      "announces", "announce", "announced", "reports", "reported", "report", "signs", "signed", "receives",
+      "received", "enters", "entered", "launches", "launched", "completes", "completed", "secures", "secured",
+      "wins", "won", "awarded", "awards", "to", "provides", "files", "filed", "prices", "priced", "closes",
+      "closed", "expands", "appoints", "appointed", "names", "named", "partners", "joins", "achieves",
+      "obtains", "granted", "grants", "unveils", "introduces", "delivers", "regains", "issues", "confirms",
+      "declares", "posts", "sets", "schedules", "expects", "raises", "lowers", "updates", "begins", "commences",
+      "selected", "selects", "acquires", "acquired", "agrees", "extends", "presents", "showcases", "highlights",
+      "celebrates", "debuts", "doses", "initiates", "submits", "strengthens", "adds", "hires", "releases",
+      "is", "has", "will", "welcomes"};
+  for (const char* k : kStops)
+    if (iequals(w, k)) return true;
+  return false;
+}
+
+// Tries `candidate` and its suffixes (dropping leading words such as leftover
+// datelines) against the issuer-name index.
+uint32_t match_name(const SymbolTable& symbols, std::string_view candidate) {
+  candidate = trim(candidate);
+  for (int guard = 0; guard < 8 && !candidate.empty(); ++guard) {
+    const uint32_t id = symbols.find_by_name(candidate);
+    if (id != SymbolTable::kInvalid) return id;
+    const std::size_t sp = candidate.find(' ');
+    if (sp == std::string_view::npos) break;
+    candidate = trim(candidate.substr(sp + 1));
+  }
+  return SymbolTable::kInvalid;
+}
+
+// Fallback for stories without an exchange tag: the publisher/contributor
+// field, then the lead sentence ("<Company>, Inc. today announced ..."), then
+// the headline subject ("<Company> Signs ...").
+uint32_t resolve_by_company_name(std::string_view item, const NewsEvent& ev, const SymbolTable& symbols,
+                                 ParseScratch& s) {
+  for (std::string_view tag : {"dc:contributor", "dc:creator", "author", "dc:publisher"}) {
+    const std::string_view v = trim(xml::unwrap_cdata(xml::child_text(item, tag)));
+    if (v.empty()) continue;
+    s.c.clear();
+    text::append_decoded_entities(v, s.c);
+    const uint32_t id = symbols.find_by_name(s.c);
+    if (id != SymbolTable::kInvalid) return id;
+  }
+  const std::string_view body = ev.body.view().substr(0, std::min<std::size_t>(ev.body.len, 600));
+  std::size_t start = 0;
+  for (std::string_view dl : {" -- ", " \xE2\x80\x94 ", " \xE2\x80\x93 ", "--", " - "}) {
+    const std::size_t p = body.find(dl);
+    if (p != std::string_view::npos && p < 250) {
+      start = p + dl.size();
+      break;
+    }
+  }
+  std::size_t end = std::string_view::npos;
+  for (std::string_view cue : {" today announced", " announced today", " announced", " announces", " (the ", " (\xE2\x80\x9C",
+                               " (\"", ", a ", ", an ", ", the ", " reported", " is pleased", " has "}) {
+    const std::size_t p = body.find(cue, start);
+    if (p != std::string_view::npos && p - start < 200 && p < end) end = p;
+  }
+  if (end != std::string_view::npos) {
+    const uint32_t id = match_name(symbols, body.substr(start, end - start));
+    if (id != SymbolTable::kInvalid) return id;
+  }
+  // Headline subject.
+  const std::string_view title = ev.title.view();
+  std::size_t pos = 0, subject_end = 0;
+  int words = 0;
+  while (pos < title.size() && words < 8) {
+    while (pos < title.size() && title[pos] == ' ') ++pos;
+    const std::size_t b = pos;
+    while (pos < title.size() && title[pos] != ' ') ++pos;
+    std::string_view w = title.substr(b, pos - b);
+    if (w.empty()) break;
+    const bool colon = w.back() == ':';
+    if (colon) w.remove_suffix(1);
+    if (is_subject_stop(w)) break;
+    subject_end = b + w.size();
+    ++words;
+    if (colon) break;
+  }
+  if (subject_end > 0) {
+    std::string_view subj = title.substr(0, subject_end);
+    // Possessive: "Acme's new robot" -> "Acme".
+    if (const auto ap = subj.find("'s"); ap != std::string_view::npos) subj = subj.substr(0, ap);
+    if (const auto ap = subj.find("\xE2\x80\x99s"); ap != std::string_view::npos) subj = subj.substr(0, ap);
+    const uint32_t id = symbols.find_by_name(subj);
+    if (id != SymbolTable::kInvalid) return id;
+  }
+  return SymbolTable::kInvalid;
+}
+
 bool fill_rss(std::string_view item, const SymbolTable& symbols, NewsEvent& ev, ParseScratch& s) {
   ev.kind = EventKind::News;
   text_of(xml::child_text(item, "title"), s.a, s.b, 1024);
@@ -116,6 +207,13 @@ bool fill_rss(std::string_view item, const SymbolTable& symbols, NewsEvent& ev, 
   for (std::string_view h : heads) {
     const int n = extract_tickers(h, symbols, s.hits, 16);
     add_tickers_from_hits(ev, s.hits, n);
+  }
+  if (ev.n_tickers == 0) {
+    const uint32_t id = resolve_by_company_name(item, ev, symbols, s);
+    if (id != SymbolTable::kInvalid) {
+      ev.tickers[ev.n_tickers++] = id;
+      ev.flags |= kEvNameMatched;
+    }
   }
   return true;
 }

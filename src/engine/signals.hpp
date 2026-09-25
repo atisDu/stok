@@ -40,6 +40,9 @@ struct Signal {
   double rvol;              // day volume vs expected-by-now (0 = unknown)
   double dollar_volume;     // traded since the news
   double vwap;
+  double bid;
+  double ask;
+  double spread_pct;        // 0 = no valid quote
   double market_cap;
   double shares_out;
   double amount_usd;
@@ -73,10 +76,38 @@ struct Outcome {
 };
 static_assert(std::is_trivially_copyable_v<Outcome>);
 
+// One simulated trade (opened or closed) from the paper trader.
+struct PaperTrade {
+  uint32_t sym;
+  Tier tier;
+  Catalyst catalyst;
+  bool closed;
+  bool quote_entry;          // filled against a real ask (vs last + slippage)
+  bool quote_exit;
+  bool size_over_touch;      // our size exceeded the displayed size at the touch
+  int32_t score;
+  uint64_t news_id;
+  uint64_t signal_ns;
+  uint64_t entry_ns;
+  uint64_t exit_ns;
+  double signal_px;
+  double entry_px;
+  double exit_px;
+  double shares;
+  double fees;
+  double pnl_usd;
+  double pnl_pct;
+  double mfe_pct;            // best unrealized gain while open
+  double mae_pct;            // worst unrealized loss while open
+  char ticker[16];
+  char exit_reason[16];      // stop, target, trail, time, flat, shutdown
+};
+static_assert(std::is_trivially_copyable_v<PaperTrade>);
+
 // Everything the journal thread writes. The engine fills structs; the
 // journal thread does the (comparatively slow) JSON formatting and I/O.
 struct JournalRecord {
-  enum class Type : uint8_t { News = 0, Signal = 1, Outcome = 2, Text = 3 };
+  enum class Type : uint8_t { News = 0, Signal = 1, Outcome = 2, Text = 3, Trade = 4 };
   Type type;
   // News
   NewsEvent news;
@@ -90,9 +121,10 @@ struct JournalRecord {
   uint16_t first_source;
   int64_t first_seen_lag_ns;  // this arrival minus first arrival (duplicates)
   uint64_t engine_ns;         // wall: engine handled it
-  // Signal / Outcome
+  // Signal / Outcome / Trade
   Signal signal;
   Outcome outcome;
+  PaperTrade trade;
   // Text: a preformatted JSON object (stats etc.) for file `text_file`
   char text_file[16];
   FixedStr<2048> text;

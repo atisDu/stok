@@ -115,6 +115,7 @@ bool load_settings(const Config& cfg, Settings& s, std::string* err) {
   e.alert_move_pct = sg.get_double("alert_move_pct", e.alert_move_pct);
   e.alert_rvol = sg.get_double("alert_rvol", e.alert_rvol);
   e.alert_dollar_volume = sg.get_double("alert_dollar_volume", e.alert_dollar_volume);
+  e.alert_max_spread_pct = sg.get_double("alert_max_spread_pct", e.alert_max_spread_pct);
   e.high_max_shares = sg.get_double("high_max_shares", e.high_max_shares);
   e.high_require_above_vwap = sg.get_bool("high_require_above_vwap", e.high_require_above_vwap);
   e.watch_window_s = static_cast<int>(sg.get_int("watch_window_min", e.watch_window_s / 60) * 60);
@@ -144,6 +145,40 @@ bool load_settings(const Config& cfg, Settings& s, std::string* err) {
   e.dilution.shelf_window_days = static_cast<int>(d.get_int("shelf_window_days", e.dilution.shelf_window_days));
   e.dilution.proxy_window_days = static_cast<int>(d.get_int("proxy_window_days", e.dilution.proxy_window_days));
 
+  const auto& pp = cfg.section("paper");
+  PaperConfig& pc = e.paper;
+  pc.enabled = pp.get_bool("enabled", pc.enabled);
+  {
+    const auto tiers = pp.get_list("tiers");
+    if (!tiers.empty()) {
+      pc.trade_alert = pc.trade_high = false;
+      for (const auto& t : tiers) {
+        if (iequals(t, "alert")) pc.trade_alert = true;
+        if (iequals(t, "high")) pc.trade_high = true;
+      }
+    }
+  }
+  pc.latency_ms = static_cast<int>(pp.get_int("latency_ms", pc.latency_ms));
+  pc.slippage_bps = pp.get_double("slippage_bps", pc.slippage_bps);
+  pc.position_usd = pp.get_double("position_usd", pc.position_usd);
+  pc.max_open = static_cast<int>(pp.get_int("max_open", pc.max_open));
+  pc.max_daily_loss_usd = pp.get_double("max_daily_loss_usd", pc.max_daily_loss_usd);
+  pc.stop_loss_pct = pp.get_double("stop_loss_pct", pc.stop_loss_pct);
+  pc.take_profit_pct = pp.get_double("take_profit_pct", pc.take_profit_pct);
+  pc.trail_activate_pct = pp.get_double("trail_activate_pct", pc.trail_activate_pct);
+  pc.trail_pct = pp.get_double("trail_pct", pc.trail_pct);
+  pc.max_hold_min = static_cast<int>(pp.get_int("max_hold_min", pc.max_hold_min));
+  {
+    const std::string fb = pp.get_str("flat_by", "15:55");
+    const auto colon = fb.find(':');
+    if (colon != std::string::npos)
+      pc.flat_by_minute = parse_int<int>(fb.substr(0, colon)).value_or(15) * 60 + parse_int<int>(fb.substr(colon + 1)).value_or(55);
+  }
+  pc.entry_timeout_s = static_cast<int>(pp.get_int("entry_timeout_s", pc.entry_timeout_s));
+  pc.max_chase_pct = pp.get_double("max_chase_pct", pc.max_chase_pct);
+  pc.commission_per_share = pp.get_double("commission_per_share", pc.commission_per_share);
+  pc.commission_min = pp.get_double("commission_min", pc.commission_min);
+
   // ---- market ----
   const auto& m = cfg.section("market");
   MarketOptions& mo = s.market;
@@ -155,9 +190,12 @@ bool load_settings(const Config& cfg, Settings& s, std::string* err) {
   mo.mold.port = static_cast<uint16_t>(m.get_int("mold_port", 0));
   mo.mold.iface_addr = m.get_str("mold_iface", "");
   mo.mold.rcvbuf_bytes = static_cast<int>(m.get_int("rcvbuf_bytes", 64 << 20));
+  mo.mold.rerequest = m.get_str("mold_rerequest", "");
+  mo.mold.gap_timeout_ms = static_cast<int>(m.get_int("mold_gap_timeout_ms", 250));
   mo.bridge_bind = m.get_str("bridge_bind", "127.0.0.1");
   mo.bridge_port = static_cast<uint16_t>(m.get_int("bridge_port", 7777));
   mo.order_capacity = static_cast<std::size_t>(m.get_int("order_capacity", 1 << 22));
+  mo.track_quotes = m.get_bool("track_quotes", true);
   mo.write_baseline = m.get_bool("write_baseline", true);
   mo.busy_poll = m.get_bool("busy_poll", false);
   mo.baseline_dir = s.baseline_dir;

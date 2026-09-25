@@ -5,9 +5,11 @@
    EDGAR "latest filings" feed (self-signed cert, keep-alive, gzip, ETag/304).
    After a few polls it "publishes" an Acme Robotics contract story.
 2. Starts stokd with market.source = bridge and feeds pointing at that server.
-3. Streams trades into the bridge: a pre-news print, then a +22% run on volume,
-   then an LULD pause.
-4. Prints what stokd emitted (WATCH -> ALERT/HIGH -> HALT) and the journal.
+3. Streams quotes and trades into the bridge: a pre-news print, then a +22%
+   run on volume with a tight spread, a further run that hits the paper
+   trader's target, then an LULD pause.
+4. Prints what stokd emitted (WATCH -> ALERT/HIGH -> HALT), the paper trade,
+   and the stok-report summary of the journal.
 
 Usage: python3 scripts/demo.py [build_dir]
 """
@@ -94,6 +96,11 @@ eval_interval_us = 1000
 stats_interval_s = 3600
 [movers]
 enabled = false
+[paper]
+enabled = true
+latency_ms = 50
+slippage_bps = 20
+position_usd = 1000
 [market]
 source = bridge
 bridge_port = {bridge_port}
@@ -110,12 +117,18 @@ stdout = true
         udp.sendto(line.encode(), ("127.0.0.1", bridge_port))
 
     time.sleep(0.4)
+    send("Q ACMR 1.99 3000 2.01 2500")
     send("T ACMR 2.00 1000")          # last print before the news
     time.sleep(1.6)                   # the server publishes the story on the 4th poll
+    send("Q ACMR 2.19 5000 2.21 4000")
     send("T ACMR 2.20 50000")
     time.sleep(0.05)
     send("T ACMR 2.45 150000")        # +22.5% since the news on ~$480K
-    time.sleep(0.5)
+    send("Q ACMR 2.44 5000 2.46 3000")  # 0.8% spread: tradeable
+    time.sleep(0.4)                   # paper order arrives after 50 ms and fills at the ask
+    send("Q ACMR 3.00 5000 3.02 2000")
+    send("T ACMR 3.01 20000")         # bid +22% over the entry: paper target
+    time.sleep(0.4)
     send("H ACMR H LUDP")             # volatility pause
     time.sleep(0.8)
     proc.send_signal(signal.SIGINT)
@@ -130,7 +143,8 @@ stdout = true
     print("stokd log (excerpt):")
     print("=" * 78)
     for line in err.splitlines():
-        if any(k in line for k in ("primed", "running", "reference data", "scorer", "final", "req=", "items=", "engine:")):
+        if any(k in line for k in ("primed", "running", "reference data", "scorer", "final", "req=", "items=", "engine:",
+                                   "paper")):
             print(line)
     journal = sorted((tmp / "data" / "journal").glob("*/*.jsonl"))
     print("=" * 78)
@@ -141,7 +155,23 @@ stdout = true
             j = json.loads(line)
             print(f"  {j['tier']:6} {j['ticker']:6} score={j['score']} move={j.get('move_pct')}% "
                   f"news->signal={j.get('news_to_signal_ms', '-')} ms  why={j['why']}")
-    ok = ("WATCH ACMR" in out) and ("ALERT ACMR" in out or "HIGH ACMR" in out) and ("HALT ACMR" in out)
+    trades = [p for p in journal if p.name == "trades.jsonl"]
+    closed = []
+    if trades:
+        for line in open(trades[0]):
+            j = json.loads(line)
+            if j["event"] == "close":
+                closed.append(j)
+                print(f"  paper {j['ticker']}: bought {j['shares']:.0f} @ {j['entry_px']} "
+                      f"sold @ {j['exit_px']} ({j['exit_reason']}) pnl ${j['pnl_usd']} ({j['pnl_pct']:+.2f}%)")
+    report = subprocess.run([str(BUILD / "stok-report"), "-d", str(tmp / "data" / "journal")], capture_output=True,
+                            text=True)
+    print("=" * 78)
+    print("stok-report:")
+    print("=" * 78)
+    print(report.stdout)
+    ok = ("WATCH ACMR" in out) and ("ALERT ACMR" in out or "HIGH ACMR" in out) and ("HALT ACMR" in out) \
+        and len(closed) == 1 and closed[0]["exit_reason"] == "target" and report.returncode == 0
     print("demo:", "PASS" if ok else "FAIL")
     shutil.rmtree(tmp, ignore_errors=True)
     return 0 if ok else 1

@@ -121,6 +121,10 @@ std::string AlertSink::format_text(const Signal& s, const std::vector<std::strin
     out += line;
   }
   if (s.dollar_volume > 0) out += "  " + money(s.dollar_volume) + " traded";
+  if (s.spread_pct > 0) {
+    std::snprintf(line, sizeof(line), "  spread %.1f%%", s.spread_pct);
+    out += line;
+  }
   if (s.halt_reason[0]) {
     out += "  [";
     out += s.halt_reason;

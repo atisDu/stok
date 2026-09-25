@@ -57,6 +57,7 @@ Engine::Engine(EngineConfig cfg, const SymbolTable& symbols, const MarketBoard* 
       source_names_(std::move(source_names)) {
   watch_.resize(1024);
   src_stats_.resize(std::max<std::size_t>(1, source_names_.size() + 1));
+  if (cfg_.paper.enabled && board_) paper_ = std::make_unique<PaperTrader>(cfg_.paper, symbols_, *board_);
   universe_static_.assign(symbols_.size(), 0);
   for (uint32_t i = 0; i < symbols_.size(); ++i) {
     const SymbolInfo& s = symbols_[i];
@@ -187,6 +188,11 @@ void Engine::emit(const Watch& w, Tier tier, uint64_t now_wall, const char* halt
     s.rvol = rvol_of(w.sym, h.day_volume, now_wall);
     s.dollar_volume = static_cast<double>(h.notional_e4 - std::min(h.notional_e4, w.notional_at_news)) / 1e4;
     s.vwap = h.vwap();
+    if (h.quote_valid()) {
+      s.bid = h.bid();
+      s.ask = h.ask();
+      s.spread_pct = h.spread_pct();
+    }
     if (s.market_cap <= 0 && info.shares_outstanding > 0 && s.price > 0) s.market_cap = info.shares_outstanding * s.price;
   } else {
     s.price = info.prev_close;
@@ -202,6 +208,7 @@ void Engine::emit(const Watch& w, Tier tier, uint64_t now_wall, const char* halt
     else if (tier == Tier::Alert || tier == Tier::High) e2e_ns_.record(s.t_signal_ns - w.t_news);
   }
 
+  if (paper_ && (tier == Tier::Alert || tier == Tier::High)) paper_->on_signal(s, now_wall);
   const bool push = tier != Tier::Watch || cfg_.push_watch;
   if (push && alerts_) {
     if (alerts_->try_push(s)) {
@@ -250,6 +257,23 @@ void Engine::journal_outcome(const Watch& w, uint32_t horizon_s, uint64_t now_wa
   std::snprintf(o.ticker, sizeof(o.ticker), "%s", symbols_[w.sym].ticker.c_str());
   journal_->publish();
   if (journal_waker_) journal_waker_->notify();
+}
+
+void Engine::journal_trade(const PaperTrade& t) {
+  if (!journal_) return;
+  JournalRecord* r = journal_->try_claim();
+  if (!r) {
+    ++journal_drops_;
+    return;
+  }
+  r->type = JournalRecord::Type::Trade;
+  r->trade = t;
+  journal_->publish();
+  if (journal_waker_) journal_waker_->notify();
+}
+
+void Engine::shutdown(uint64_t now) {
+  if (paper_) paper_->close_all(now, "shutdown", [&](const PaperTrade& t) { journal_trade(t); });
 }
 
 void Engine::on_news(const NewsEvent& ev, uint64_t now) {
@@ -521,7 +545,11 @@ void Engine::evaluate(uint64_t now) {
     const double dollar = static_cast<double>(h.notional_e4 - std::min(h.notional_e4, w.notional_at_news)) / 1e4;
     const double rvol = rvol_of(w.sym, h.day_volume, now);
     const bool rvol_ok = rvol <= 0 || rvol >= cfg_.alert_rvol;  // unknown baseline doesn't block
-    if (!(move >= cfg_.alert_move_pct && dollar >= cfg_.alert_dollar_volume && rvol_ok && !h.halted())) continue;
+    // A wide spread means the move isn't tradeable at a sane price.
+    const bool spread_ok = cfg_.alert_max_spread_pct <= 0 || !h.quote_valid() ||
+                           h.spread_pct() <= cfg_.alert_max_spread_pct;
+    if (!(move >= cfg_.alert_move_pct && dollar >= cfg_.alert_dollar_volume && rvol_ok && spread_ok && !h.halted()))
+      continue;
     const SymbolInfo& info = symbols_[w.sym];
     const bool above_vwap = h.last() >= h.vwap();
     const bool high = w.score >= cfg_.high_score && info.shares_outstanding > 0 &&
@@ -533,6 +561,7 @@ void Engine::evaluate(uint64_t now) {
       if (cooled_down(w.sym, t, now)) emit(w, t, now);
     }
   }
+  if (paper_) paper_->step(now, [&](const PaperTrade& t) { journal_trade(t); });
 }
 
 void Engine::scan_movers(uint64_t now) {
@@ -607,8 +636,7 @@ void Engine::run(SpscQueue<NewsEvent>& news, SpscQueue<MarketEvent>& market, Wak
     }
     if (now >= next_stats) {
       next_stats = now + stats_every;
-      const std::string rep = stats_report(true);
-      LOG_INFO("engine stats:\n%s", rep.c_str());
+      Logger::instance().log_lines(LogLevel::Info, "engine stats:", stats_report(true));
     }
     if (did) continue;
     if (cfg_.busy_poll) {
@@ -620,6 +648,7 @@ void Engine::run(SpscQueue<NewsEvent>& news, SpscQueue<MarketEvent>& market, Wak
     const uint64_t t = mono_ns();
     if (until > t) self_waker.wait(until - t, [&] { return !news.empty() || !market.empty(); });
   }
+  shutdown(wall_ns());
 }
 
 std::string Engine::stats_report(bool reset) {
@@ -658,6 +687,7 @@ std::string Engine::stats_report(bool reset) {
                 (unsigned long long)tier_counts_[6], (unsigned long long)journal_drops_,
                 (unsigned long long)alert_drops_);
   out += line;
+  if (paper_) out += "  " + paper_->stats_line() + "\n";
   if (reset) {
     handle_ns_.reset();
     e2e_ns_.reset();

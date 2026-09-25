@@ -39,6 +39,10 @@ class Logger {
 
   uint64_t dropped() const { return dropped_.load(std::memory_order_relaxed); }
 
+  // Logs a header, then each line of `text` as its own record (records are
+  // fixed-size, so long multi-line reports must not go in one record).
+  void log_lines(LogLevel level, const char* header, const std::string& text);
+
   // Name used for records from the calling thread.
   static void set_thread_tag(const char* tag);
 

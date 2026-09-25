@@ -74,3 +74,30 @@ TEST(form_classification) {
   CHECK_EQ(form8k_item_bit(9, 1), 31);
   CHECK_EQ(form8k_item_bit(6, 6), -1);
 }
+
+TEST(company_name_normalization_and_index) {
+  CHECK_EQ(SymbolTable::normalize_company_name("Acme Robotics, Inc. - Common Stock"), std::string("ACME ROBOTICS"));
+  CHECK_EQ(SymbolTable::normalize_company_name("ACME ROBOTICS, INC."), std::string("ACME ROBOTICS"));
+  CHECK_EQ(SymbolTable::normalize_company_name("The Macy's Group Holdings Ltd."), std::string("MACYS"));
+  CHECK_EQ(SymbolTable::normalize_company_name("Johnson & Johnson"), std::string("JOHNSON AND JOHNSON"));
+  CHECK_EQ(SymbolTable::normalize_company_name("Big Cap Corp - Class A Common Stock"), std::string("BIG CAP"));
+  SymbolTable t = test::fixture_symbols();
+  CHECK_EQ(t.find_by_name("Acme Robotics, Inc."), t.find("ACMR"));      // primary, not the warrant
+  CHECK_EQ(t.find_by_name("acme robotics"), t.find("ACMR"));
+  CHECK_EQ(t.find_by_name("Echo Mining Corp."), SymbolTable::kInvalid); // OTC: not indexed
+  CHECK_EQ(t.find_by_name("Some Nasdaq ETF"), SymbolTable::kInvalid);   // ETF: not indexed
+  // Two different issuers with the same normalized name -> ambiguous, no match.
+  SymbolInfo a;
+  a.ticker = "DUPA";
+  a.name = "Duplicate Holdings Inc.";
+  a.exchange = Exchange::NasdaqCM;
+  a.cik = 9001;
+  SymbolInfo b = a;
+  b.ticker = "DUPB";
+  b.name = "Duplicate Corp";
+  b.cik = 9002;
+  t.add(a);
+  t.add(b);
+  t.build_name_index();
+  CHECK_EQ(t.find_by_name("Duplicate Inc"), SymbolTable::kInvalid);
+}

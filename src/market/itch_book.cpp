@@ -5,8 +5,14 @@
 namespace stok {
 
 ItchBook::ItchBook(const SymbolTable& symbols, MarketBoard& board, SpscQueue<MarketEvent>* events, Waker* waker,
-                   std::size_t order_capacity)
-    : symbols_(symbols), board_(board), events_(events), waker_(waker), orders_(order_capacity, 0.6) {
+                   std::size_t order_capacity, bool track_quotes)
+    : symbols_(symbols),
+      board_(board),
+      events_(events),
+      waker_(waker),
+      orders_(order_capacity, 0.6),
+      books_(track_quotes ? board.size() : 0),
+      track_quotes_(track_quotes) {
   locate_to_sym_.fill(SymbolTable::kInvalid);
   last_state_.fill(0);
 }

@@ -63,6 +63,18 @@ void Logger::log(LogLevel level, const char* fmt, ...) {
   va_end(ap);
 }
 
+void Logger::log_lines(LogLevel level, const char* header, const std::string& text) {
+  if (!enabled(level)) return;
+  log(level, "%s", header);
+  std::size_t start = 0;
+  while (start < text.size()) {
+    std::size_t nl = text.find('\n', start);
+    if (nl == std::string::npos) nl = text.size();
+    if (nl > start) log(level, "%.*s", static_cast<int>(nl - start), text.c_str() + start);
+    start = nl + 1;
+  }
+}
+
 void Logger::vlog(LogLevel level, const char* fmt, va_list ap) {
   const bool ok = q_.try_push_with([&](Record& r) {
     r.ts_ns = wall_ns();

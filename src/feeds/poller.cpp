@@ -562,8 +562,7 @@ void FeedPoller::run(const std::atomic<bool>& stop) {
     const uint64_t now = mono_ns();
     if (opts_.stats_interval_s > 0 && now - last_stats_ > static_cast<uint64_t>(opts_.stats_interval_s) * kNsPerSec) {
       last_stats_ = now;
-      const std::string rep = stats_report(true);
-      LOG_INFO("feed stats:\n%s", rep.c_str());
+      Logger::instance().log_lines(LogLevel::Info, "feed stats:", stats_report(true));
     }
   }
   resolver_.stop();

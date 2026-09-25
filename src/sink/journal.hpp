@@ -18,6 +18,7 @@ namespace stok {
 //   <dir>/YYYY-MM-DD/news.jsonl      every item seen, with score and context
 //   <dir>/YYYY-MM-DD/signals.jsonl   every signal emitted
 //   <dir>/YYYY-MM-DD/outcomes.jsonl  price/volume at +1m/+5m/+15m/+30m/+60m after each watched story
+//   <dir>/YYYY-MM-DD/trades.jsonl    paper trades (open and close records)
 //   <dir>/YYYY-MM-DD/stats.jsonl     periodic latency/feed stats
 // This is the dataset for tuning rules and deciding whether an edge exists
 // (DuckDB/pandas read JSONL directly). Formatting and I/O happen on this
@@ -35,6 +36,7 @@ class Journal {
   std::string news_json(const JournalRecord& r) const;
   std::string signal_json(const Signal& s) const;
   std::string outcome_json(const Outcome& o) const;
+  std::string trade_json(const PaperTrade& t) const;
 
  private:
   FILE* file_for(const std::string& name, uint64_t t_ns);
